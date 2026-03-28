@@ -1,12 +1,12 @@
 package main
 
 import (
-	"doest/matter/slime-mold/actions"
-	"doest/matter/slime-mold/components"
 	"fmt"
 
 	// "os"
 
+	"github.com/dq1Mango/mold-slime/actions"
+	"github.com/dq1Mango/mold-slime/components"
 	"github.com/hexops/vecty"
 	"github.com/hexops/vecty/elem"
 	// "github.com/hexops/vecty/event"
@@ -20,7 +20,7 @@ func main() {
 
 	vecty.SetTitle("Graph Theory")
 	vecty.AddStylesheet("style.css")
-	vecty.AddStylesheet("colors.css")
+	// vecty.AddStylesheet("colors.css")
 	vecty.RenderBody(NewPageView())
 }
 

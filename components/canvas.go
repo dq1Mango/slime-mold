@@ -1,12 +1,12 @@
 package components
 
 import (
-	"doest/matter/slime-mold/actions"
-	"doest/matter/slime-mold/model"
 	"fmt"
 	"math"
 	"syscall/js"
 
+	"github.com/dq1Mango/mold-slime/actions"
+	"github.com/dq1Mango/mold-slime/model"
 	"github.com/hexops/vecty"
 	"github.com/hexops/vecty/elem"
 	"github.com/hexops/vecty/event"
@@ -24,13 +24,16 @@ type Canvas struct {
 	Size int
 
 	Actions chan actions.Action
+
+	drawing bool
+	x, y    float64
 }
 
 func NewCanvas(id string) *Canvas {
 	return &Canvas{
 		Id:      id,
 		Size:    CANVAS_SIZE,
-		Actions: make(chan actions.Action),
+		Actions: make(chan actions.Action, 10),
 	}
 }
 
@@ -69,6 +72,14 @@ func (c *Canvas) Render() vecty.ComponentOrHTML {
 						point := c.PointFromMouseEvent(e)
 
 						c.Actions <- &actions.MouseDown{Pos: point}
+					}),
+
+					event.MouseUp(func(e *vecty.Event) {
+
+						// shift := e.Get("shiftKey").Bool()
+						point := c.PointFromMouseEvent(e)
+
+						c.Actions <- &actions.MouseUp{Pos: point}
 					}),
 
 					// these closures are rly nice i have to say
@@ -160,15 +171,44 @@ func (c *Canvas) PointFromMouseEvent(e *vecty.Event) model.Point {
 
 }
 
+func (c *Canvas) Clear() {
+	c.ctx.Call("clearRect", 0, 0, c.Size, c.Size)
+}
+
+func (c *Canvas) drawLine(point model.Point) {
+
+	ctx := c.ctx
+
+	ctx.Call("beginPath")
+	ctx.Set("strokeStyle", "black")
+	ctx.Set("lineWidth", 1)
+
+	ctx.Call("moveTo", c.x, c.y)
+	ctx.Call("lineTo", point.X, point.Y)
+	ctx.Call("stroke")
+	ctx.Call("closePath")
+
+}
+
 // Handle actions sent of canvas.Actions asychnronously
 func (c *Canvas) handleActions() {
 	for {
 		action := <-c.Actions
 
-		switch action.(type) {
+		switch a := action.(type) {
 
 		case *actions.Draw:
 			fmt.Println("got a redraw request...")
+
+		case *actions.MouseDown:
+			c.drawing = true
+
+		case *actions.MouseMove:
+			c.drawLine(a.Pos)
+
+		case *actions.MouseUp:
+			c.drawLine(a.Pos)
+			c.drawing = false
 
 		default:
 			fmt.Printf("Unknown action of type: %T\n", action)

@@ -1,6 +1,6 @@
 package actions
 
-import "doest/matter/slime-mold/model"
+import "github.com/dq1Mango/mold-slime/model"
 
 type Action any
 
@@ -15,6 +15,10 @@ type MouseMove struct {
 }
 
 type MouseDown struct {
+	Pos model.Point
+}
+
+type MouseUp struct {
 	Pos model.Point
 }
 
