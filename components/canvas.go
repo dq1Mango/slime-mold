@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"syscall/js"
+	"time"
 
 	"github.com/dq1Mango/mold-slime/actions"
 	"github.com/dq1Mango/mold-slime/model"
@@ -14,6 +15,8 @@ import (
 )
 
 const CANVAS_SIZE = 100
+const TPS = 30
+const DELAY = 1.0 / TPS * 1000
 
 type Canvas struct {
 	vecty.Core
@@ -23,17 +26,20 @@ type Canvas struct {
 	Id   string
 	Size int
 
-	Actions chan actions.Action
+	Actions    chan actions.Action
+	Simulation *model.Simulation
 
+	running bool
 	drawing bool
 	x, y    float64
 }
 
 func NewCanvas(id string) *Canvas {
 	return &Canvas{
-		Id:      id,
-		Size:    CANVAS_SIZE,
-		Actions: make(chan actions.Action, 10),
+		Id:         id,
+		Size:       CANVAS_SIZE,
+		Actions:    make(chan actions.Action, 10),
+		Simulation: model.NewSimulation(100),
 	}
 }
 
@@ -158,6 +164,28 @@ func (c *Canvas) Mount() {
 	go func() {
 		c.handleActions()
 	}()
+
+	// tick := make(chan time.Time)
+
+	go func() {
+		// delay := int(1.0 / TPS * 1000)
+		// fsdf := int(0.89088908)
+		for {
+
+			if c.running {
+				c.Simulation.Tick()
+				select {
+
+				case c.Actions <- &actions.Tick{}:
+
+				default:
+					fmt.Println("actions busy")
+				}
+			}
+			time.Sleep(time.Duration(math.Round(DELAY)) * time.Millisecond)
+		}
+	}()
+
 }
 
 func (c *Canvas) PointFromMouseEvent(e *vecty.Event) model.Point {
@@ -189,6 +217,33 @@ func (c *Canvas) drawLine(point model.Point) {
 	ctx.Call("closePath")
 
 }
+func round(x float64) int {
+	return int(math.Round(x))
+}
+
+func greyScale(x float64) string {
+	value := round(x / model.CHEMO_DEPOSIT * 255)
+
+	value = min(value, 255)
+
+	return fmt.Sprintf("rgba(%d,%d,%d,1)", value, value, value)
+}
+
+func (c *Canvas) Draw() {
+	c.Clear()
+
+	for y := range c.Size {
+		for x := range c.Size {
+			c.ctx.Set("fillStyle", greyScale(c.Simulation.TrailLayer[y][x]))
+			c.ctx.Call("fillRect", x, y, x+1, y+1)
+		}
+	}
+}
+
+func (c *Canvas) Tick() {
+	// c.Simulation.Tick()
+	c.Draw()
+}
 
 // Handle actions sent of canvas.Actions asychnronously
 func (c *Canvas) handleActions() {
@@ -200,6 +255,9 @@ func (c *Canvas) handleActions() {
 		case *actions.Draw:
 			fmt.Println("got a redraw request...")
 
+		case *actions.Tick:
+			c.Tick()
+
 		case *actions.MouseDown:
 			c.drawing = true
 
@@ -209,6 +267,12 @@ func (c *Canvas) handleActions() {
 		case *actions.MouseUp:
 			c.drawLine(a.Pos)
 			c.drawing = false
+
+		case *actions.Start:
+			c.running = true
+
+		case *actions.Pause:
+			c.running = false
 
 		default:
 			fmt.Printf("Unknown action of type: %T\n", action)

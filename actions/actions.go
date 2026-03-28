@@ -6,6 +6,8 @@ type Action any
 
 type Draw struct{}
 
+type Tick struct{}
+
 type Start struct{}
 type Pause struct{}
 type Reset struct{}
