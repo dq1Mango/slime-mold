@@ -73,25 +73,38 @@ func NewSimulation(size int) *Simulation {
 		r:          rand.New(rand.NewSource(time.Now().UnixMilli())),
 	}
 
-	center := size / 2
-	start := center - int(float64(size)*SQUARE_PERCENT/2)
-	stop := center + int(float64(size)*SQUARE_PERCENT/2)
+	for range int(float64(size) * float64(size) * 0.15) {
+		for {
+			// selected := Point{X: float64(simulation.r.Intn(size)), Y: float64(simulation.r.Intn(size))}
 
-	length := stop - start
+			// if simulation.indexData(selected) == nil {
+			x, y := simulation.r.Intn(size), simulation.r.Intn(size)
 
-	// r := rand.New(rand.NewSource(time.Now().UnixMilli()))
-
-	right := 0.0
-	down := math.Pi / 2
-	left := math.Pi
-	up := 3 * math.Pi / 2
-
-	for i := 0; i < length; i += 2 {
-		simulation.AddParticle(start+i, start, right)
-		simulation.AddParticle(start, start+i, up)
-		simulation.AddParticle(stop-i, stop, left)
-		simulation.AddParticle(stop, stop-i, down)
+			simulation.AddParticle(x, y, randomDirection(simulation.r))
+			break
+			// }
+		}
 	}
+
+	// center := size / 2
+	// start := center - int(float64(size)*SQUARE_PERCENT/2)
+	// stop := center + int(float64(size)*SQUARE_PERCENT/2)
+	//
+	// length := stop - start
+	//
+	// // r := rand.New(rand.NewSource(time.Now().UnixMilli()))
+	//
+	// right := 0.0
+	// down := math.Pi / 2
+	// left := math.Pi
+	// up := 3 * math.Pi / 2
+	//
+	// for i := 0; i < length; i += 2 {
+	// 	simulation.AddParticle(start+i, start, right)
+	// 	simulation.AddParticle(start, start+i, up)
+	// 	simulation.AddParticle(stop-i, stop, left)
+	// 	simulation.AddParticle(stop, stop-i, down)
+	// }
 
 	// simulation.AddParticle(50, 50, randomDirection(r))
 
