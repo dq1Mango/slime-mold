@@ -15,7 +15,7 @@ import (
 )
 
 const CANVAS_SIZE = 100
-const TPS = 30
+const TPS = 20
 const DELAY = 1.0 / TPS * 1000
 
 type Canvas struct {
@@ -169,22 +169,35 @@ func (c *Canvas) Mount() {
 
 	go func() {
 		// delay := int(1.0 / TPS * 1000)
-		// fsdf := int(0.89088908)
 		for {
 
 			if c.running {
-				c.Simulation.Tick()
-				select {
-
-				case c.Actions <- &actions.Tick{}:
-
-				default:
+				if len(c.Actions) < 1 {
+					c.Actions <- &actions.Tick{}
+				} else {
 					fmt.Println("actions busy")
 				}
 			}
 			time.Sleep(time.Duration(math.Round(DELAY)) * time.Millisecond)
 		}
 	}()
+
+	// rAF owns all canvas writes
+	var rafCallback js.Func
+	rafCallback = js.FuncOf(func(this js.Value, args []js.Value) any {
+		// drawFrame(simState.Snapshot()) // read state, draw to canvas
+		if c.running {
+			if len(c.Actions) < 1 {
+				c.Actions <- &actions.Draw{}
+			} else {
+				fmt.Println("actions busy")
+			}
+		}
+
+		js.Global().Call("requestAnimationFrame", rafCallback)
+		return nil
+	})
+	js.Global().Call("requestAnimationFrame", rafCallback)
 
 }
 
@@ -200,7 +213,9 @@ func (c *Canvas) PointFromMouseEvent(e *vecty.Event) model.Point {
 }
 
 func (c *Canvas) Clear() {
-	c.ctx.Call("clearRect", 0, 0, c.Size, c.Size)
+	// c.ctx.Call("clearRect", 0, 0, c.Size, c.Size)
+	c.ctx.Set("fillStyle", "black")
+	c.ctx.Call("fillRect", 0, 0, c.Size, c.Size)
 }
 
 func (c *Canvas) drawLine(point model.Point) {
@@ -222,7 +237,7 @@ func round(x float64) int {
 }
 
 func greyScale(x float64) string {
-	value := round(x / model.CHEMO_DEPOSIT * 255)
+	value := round(x / model.CHEMO_DEPOSIT * 255 * 10)
 
 	value = min(value, 255)
 
@@ -234,15 +249,21 @@ func (c *Canvas) Draw() {
 
 	for y := range c.Size {
 		for x := range c.Size {
-			c.ctx.Set("fillStyle", greyScale(c.Simulation.TrailLayer[y][x]))
-			c.ctx.Call("fillRect", x, y, x+1, y+1)
+			value := c.Simulation.TrailLayer[y][x]
+			if value == 0 {
+				continue
+			}
+
+			c.ctx.Set("fillStyle", greyScale(value))
+			c.ctx.Call("fillRect", x, y, 1, 1)
 		}
 	}
 }
 
 func (c *Canvas) Tick() {
-	// c.Simulation.Tick()
-	c.Draw()
+	fmt.Println("started tick")
+	c.Simulation.Tick()
+	fmt.Println("ended tick")
 }
 
 // Handle actions sent of canvas.Actions asychnronously
@@ -253,6 +274,7 @@ func (c *Canvas) handleActions() {
 		switch a := action.(type) {
 
 		case *actions.Draw:
+			c.Draw()
 			fmt.Println("got a redraw request...")
 
 		case *actions.Tick:

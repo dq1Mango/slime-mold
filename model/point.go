@@ -25,6 +25,10 @@ func (p *Point) Scale(r float64) {
 	p.Y *= r
 }
 
+func (p *Point) Clone() Point {
+	return Point{X: p.X, Y: p.Y}
+}
+
 func AddPoints(p1, p2 Point) Point {
 	return Point{p1.X + p2.X, p1.Y + p2.Y}
 }

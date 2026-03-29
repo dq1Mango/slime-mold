@@ -11,9 +11,8 @@ const SQUARE_PERCENT = 0.5
 const SENSOR_ANGLE = math.Pi / 4
 const ROTATION_ANGLE = math.Pi / 4
 const SENSOR_DISTANCE = 9
-
 const CHEMO_DEPOSIT = 5.0
-const CHEMO_DECAY = 0.1
+const CHEMO_DECAY = 0.2
 
 const R2D2 = math.Sqrt2 / 2
 
@@ -38,16 +37,18 @@ type Particle struct {
 }
 
 func randomDirection(r *rand.Rand) float64 {
-	// return float64(r.Float64()) * 2 * math.Pi
-	return float64(r.Intn(2)) * math.Pi
+	return float64(r.Float64()) * 2 * math.Pi
+	// return float64(r.Intn(2)) * math.Pi
 }
 
 type Simulation struct {
 	DataLayer  [][]*Particle
 	Particles  map[int]*Particle
 	TrailLayer [][]float64
-	Size       int
-	r          *rand.Rand
+	otherTrail [][]float64
+
+	Size int
+	r    *rand.Rand
 }
 
 func NewSimulation(size int) *Simulation {
@@ -55,33 +56,44 @@ func NewSimulation(size int) *Simulation {
 	data := make([][]*Particle, size)
 	particles := make(map[int]*Particle)
 	trail := make([][]float64, size)
+	otherTrail := make([][]float64, size)
 
 	for i := range size {
 		data[i] = make([]*Particle, size)
 		trail[i] = make([]float64, size)
+		otherTrail[i] = make([]float64, size)
 	}
 
 	simulation := Simulation{
 		DataLayer:  data,
 		Particles:  particles,
 		TrailLayer: trail,
+		otherTrail: otherTrail,
 		Size:       size,
 		r:          rand.New(rand.NewSource(time.Now().UnixMilli())),
 	}
 
-	start := int(float64(size) * SQUARE_PERCENT / 2)
-	stop := int(float64(size) * SQUARE_PERCENT * 1.5)
+	center := size / 2
+	start := center - int(float64(size)*SQUARE_PERCENT/2)
+	stop := center + int(float64(size)*SQUARE_PERCENT/2)
 
-	// length := stop - start
+	length := stop - start
 
-	r := rand.New(rand.NewSource(time.Now().UnixMilli()))
+	// r := rand.New(rand.NewSource(time.Now().UnixMilli()))
 
-	for i := int(start); i < int(stop); i++ {
-		simulation.AddParticle(i, start, randomDirection(r))
-		simulation.AddParticle(start, i, randomDirection(r))
-		simulation.AddParticle(stop-i, start, randomDirection(r))
-		simulation.AddParticle(start, stop-i, randomDirection(r))
+	right := 0.0
+	down := math.Pi / 2
+	left := math.Pi
+	up := 3 * math.Pi / 2
+
+	for i := 0; i < length; i += 2 {
+		simulation.AddParticle(start+i, start, right)
+		simulation.AddParticle(start, start+i, up)
+		simulation.AddParticle(stop-i, stop, left)
+		simulation.AddParticle(stop, stop-i, down)
 	}
+
+	// simulation.AddParticle(50, 50, randomDirection(r))
 
 	return &simulation
 }
@@ -140,7 +152,7 @@ func (s *Simulation) AddParticle(x, y int, direction float64) {
 }
 
 func (s *Simulation) DepositAttractant(point Point) {
-	s.TrailLayer[round(point.Y)][round(point.X)] += CHEMO_DEPOSIT
+	s.TrailLayer[int(point.Y)][int(point.X)] += CHEMO_DEPOSIT
 }
 
 func (s *Simulation) AdvanceParticles() {
@@ -151,7 +163,7 @@ func (s *Simulation) AdvanceParticles() {
 		// fmt.Println(particle.position, "+", directionVector, "=")
 		// fmt.Println(newPos)
 
-		if s.indexData(newPos) != nil {
+		if s.indexData(newPos) == nil {
 			s.setData(newPos, particle)
 			s.setData(particle.position, nil)
 
@@ -169,9 +181,17 @@ func (s *Simulation) SenseParticles() {
 		leftAngle := particle.direction - SENSOR_ANGLE
 		rightAngle := particle.direction + SENSOR_ANGLE
 
-		leftSensor := s.addPoints(particle.position, PointFromTheta(leftAngle))
-		centerSensor := s.addPoints(particle.position, PointFromTheta(particle.direction))
-		rightSensor := s.addPoints(particle.position, PointFromTheta(rightAngle))
+		leftDirection := PointFromTheta(leftAngle)
+		centerDirection := PointFromTheta(particle.direction)
+		rightDirection := PointFromTheta(rightAngle)
+
+		leftDirection.Scale(SENSOR_DISTANCE)
+		centerDirection.Scale(SENSOR_DISTANCE)
+		rightDirection.Scale(SENSOR_DISTANCE)
+
+		leftSensor := s.addPoints(particle.position, leftDirection)
+		centerSensor := s.addPoints(particle.position, centerDirection)
+		rightSensor := s.addPoints(particle.position, rightDirection)
 
 		left := *s.indexTrail(leftSensor)
 		center := *s.indexTrail(centerSensor)
@@ -198,23 +218,28 @@ func (s *Simulation) SenseParticles() {
 
 // 3x3 mean (hah get it) kernel
 func (s *Simulation) AngryColonel(point Point) float64 {
-	mean := 0.0
+	mean := *s.indexTrail(point)
 
 	for _, cardinal := range CARDINALS {
 		newPoint := s.addPoints(point, cardinal)
 		mean += *s.indexTrail(newPoint)
 	}
 
-	return mean
+	return mean / 9
 }
 
 func (s *Simulation) DiffuseDecay() {
+	// trail := make([][]float64, s.Size)
+
 	// doing this linearly may pose some issues but we shall see
 	for y := range s.Size {
+		// trail[y] = make([]float64, s.Size)
 		for x := range s.Size {
-			s.TrailLayer[y][x] = s.AngryColonel(Point{X: float64(x), Y: float64(y)})
+			s.otherTrail[y][x] = s.AngryColonel(Point{X: float64(x), Y: float64(y)})
 		}
 	}
+
+	s.TrailLayer, s.otherTrail = s.otherTrail, s.TrailLayer
 
 	for y := range s.Size {
 		for x := range s.Size {
