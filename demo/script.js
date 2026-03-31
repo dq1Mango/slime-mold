@@ -101,13 +101,10 @@ async function test() {
   let iSuckAtJS = [];
 
   for (data of dataData) {
-    // console.log(data);
     iSuckAtJS = iSuckAtJS.concat(data);
   }
   // console.log(iSuckAtJS);
   let vertData = new Float32Array(iSuckAtJS);
-
-  // console.log(vertData);
 
   const vertBuffer = gl.createBuffer();
 
@@ -133,7 +130,7 @@ async function test() {
   // gl.drawArrays(gl.POINTS, 0, dataData.length);
 }
 
-const vertData = new Float32Array([0, 0]);
+const vertData = new Float32Array([0, 0, 0, 0]);
 
 const bufA = gl.createBuffer();
 
@@ -160,7 +157,7 @@ function makeVAO(program, buffer) {
   // const velLoc = gl.getAttribLocation(program, 'inVelocity');
   // const rngLoc = gl.getAttribLocation(program, 'inRngState');
 
-  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, stride, 0);
+  gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
   gl.enableVertexAttribArray(posLoc);
   // gl.enableVertexAttribArray(velLoc);
   // gl.vertexAttribPointer(velLoc, 2, gl.FLOAT, false, stride, 8);
@@ -168,11 +165,15 @@ function makeVAO(program, buffer) {
   // gl.vertexAttribPointer(rngLoc, 1, gl.FLOAT, false, stride, 16);
 
   gl.bindVertexArray(null);
+  gl.bindBuffer(gl.ARRAY_BUFFER, null);
   return vao;
 }
 
 let vaoA;
 let vaoB;
+
+let simulationProgram = gl.createProgram();
+let renderProgram = gl.createProgram();
 
 let count = 0;
 
@@ -181,14 +182,14 @@ function frame() {
     return;
   }
 
-  if (count > 32) {
-    return;
-  }
+  // if (count > 32) {
+  //   return;
+  // }
 
+  gl.useProgram(simulationProgram);
   gl.bindVertexArray(read === bufA ? vaoA : vaoB);
   gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, tf);
 
-  console.log(bufA, bufB); // should be different numbers e.g. 1 and 2
   gl.bindBufferBase(gl.TRANSFORM_FEEDBACK_BUFFER, 0, write);
   gl.enable(gl.RASTERIZER_DISCARD); // no fragment shader needed
   gl.beginTransformFeedback(gl.POINTS);
@@ -199,14 +200,14 @@ function frame() {
   gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
 
   // render pass
-  // gl.useProgram(renderProgram);
-  // gl.bindVertexArray(read === bufA ? vaoA : vaoB); // render from write buffer
-  // gl.drawArrays(gl.POINTS, 0, PARTICLE_COUNT);
+  gl.useProgram(renderProgram);
+  gl.bindVertexArray(read === bufA ? vaoA : vaoB); // render from write buffer
+  gl.drawArrays(gl.POINTS, 0, PARTICLE_COUNT);
   //
   // swap
   [read, write] = [write, read];
 
-  count++;
+  // count++;
 
   requestAnimationFrame(frame);
 }
@@ -229,7 +230,7 @@ void main() {}`,
   //
   //
 
-  const simulationProgram = gl.createProgram();
+  simulationProgram = gl.createProgram();
   // gl.useProgram(simulationProgram);
   const simVert = compileShader(gl, gl.VERTEX_SHADER, simVertSrc);
   gl.attachShader(simulationProgram, simVert);
@@ -239,12 +240,16 @@ void main() {}`,
 
   gl.linkProgram(simulationProgram);
 
+  renderProgram = createProgram(gl, renderVertSrc, renderFragSrc);
+
   vaoA = makeVAO(simulationProgram, bufA);
   vaoB = makeVAO(simulationProgram, bufB);
 
   // let vao = makeVAO(simulationProgram, write);
 
-  gl.useProgram(simulationProgram);
+  // gl.useProgram(simulationProgram);
+
+  // gl.bindBuffer(gl.ARRAY_BUFFER, null);
 
   initialized = true;
 
