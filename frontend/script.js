@@ -5,6 +5,7 @@ const canvas = document.getElementById("canvas");
 const gl = canvas.getContext("webgl2");
 const tf = gl.createTransformFeedback();
 
+// helper function to compile a shader
 function compileShader(gl, type, source) {
   const shader = gl.createShader(type);
   gl.shaderSource(shader, source);
@@ -17,6 +18,8 @@ function compileShader(gl, type, source) {
   return shader;
 }
 
+// helper function to compile a program
+// (theres a wee bit of boilerplate in WebGL)
 function createProgram(gl, vertSrc, fragSrc) {
   const vert = compileShader(gl, gl.VERTEX_SHADER, vertSrc);
   const frag = compileShader(gl, gl.FRAGMENT_SHADER, fragSrc);
@@ -63,6 +66,7 @@ function draw(length) {
   gl.drawArrays(gl.POINTS, 0, length);
 }
 
+// used for testing and as a known good reference
 async function test() {
   // const [simVertSrc, renderVertSrc, renderFragSrc] = await Promise.all([
   //   loadShader("shaders/sim.vert"),
@@ -195,6 +199,7 @@ function frame() {
   gl.beginTransformFeedback(gl.POINTS);
 
   gl.drawArrays(gl.POINTS, 0, PARTICLE_COUNT);
+
   gl.endTransformFeedback();
   gl.disable(gl.RASTERIZER_DISCARD);
   gl.bindTransformFeedback(gl.TRANSFORM_FEEDBACK, null);
