@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
 	"image/color"
 	"math"
 	"math/rand"
@@ -1087,7 +1088,16 @@ func mouseTargetVector(cursorX, cursorY, width, height int) Vector {
 	return Vector{x: x, y: y}
 }
 
+// if we r still processing the last frame dont do more computations
+var COMPUTING bool = false
+
 func (g *LiveGame) Update() error {
+	if COMPUTING {
+		return nil
+	}
+
+	COMPUTING = true
+
 	w, h := ebiten.WindowSize()
 	x, y := ebiten.CursorPosition()
 
@@ -1102,7 +1112,10 @@ func (g *LiveGame) Update() error {
 		}
 	}
 
+	COMPUTING = false
+
 	return nil
+	// return errors.New("bruh")
 }
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
@@ -1137,29 +1150,87 @@ func main() {
 	// testing()
 	// return
 
-	var data stats.Series
+	// var data stats.Series
 
-	args := parse_args()
+	// args := parse_args()
+	time.Sleep(time.Second * 4)
+	runLive()
 
-	outputName := *args.output
-	if outputName == "" {
-		outputName = "testing"
-		fmt.Println("no -out provided, defaulting to:", outputName)
-	}
-
-	if *args.chart == "progress" {
-		data = run_simulation()
-		renderProgressBar(data)
-		return
-	}
-
-	if *args.live {
-		runLive()
-		return
-	}
+	// outputName := *args.output
+	// if outputName == "" {
+	// 	outputName = "testing"
+	// 	fmt.Println("no -out provided, defaulting to:", outputName)
+	// }
+	//
+	// if *args.chart == "progress" {
+	// 	data = run_simulation()
+	// 	renderProgressBar(data)
+	// 	return
+	// }
+	//
+	// if *args.live {
+	// 	runLive()
+	// 	return
+	// }
 
 	// one_trial(outputName)
 
+}
+
+func calc_color(percent float64) color.NRGBA {
+	RStart, REnd := 1.0, 255.0
+
+	// WOW !!! great code
+	return color.NRGBA{
+		R: uint8(RStart + (REnd-RStart)*percent),
+		A: 255,
+		// A: uint8(int(color_start.A) + round(float64(color_end.A-color_start.A)*percent)),
+	}
+}
+
+func grid2png(grid Grid) *image.NRGBA {
+
+	size := len(grid)
+	screen_size := 960
+
+	scale := screen_size / size
+
+	largest := 0.0
+	for _, row := range grid {
+		for _, value := range row {
+			if float64(value) > largest {
+				largest = float64(value)
+			}
+		}
+	}
+
+	*grid.index(mid_point()) = Origin
+
+	// cropped := model.size - model.distance*2
+
+	img := image.NewNRGBA(image.Rect(0, 0, size*scale, size*scale))
+
+	// for y, row := range grid[model.distance : model.size-model.distance] {
+	// 	for x, value := range row[model.distance : model.size-model.distance] {
+	for y, row := range grid {
+		for x, value := range row {
+
+			var color color.Color
+			if value <= 0 {
+				color = StateColor[value]
+			} else {
+				color = calc_color(float64(value) / largest)
+			}
+
+			for i := range scale {
+				for j := range scale {
+					img.Set(x*scale+j, y*scale+i, color)
+				}
+			}
+		}
+	}
+
+	return img
 }
 
 func Pointer[T any](t T) *T {
