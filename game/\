@@ -189,62 +189,6 @@ func attractionForce(from, to Vector) Vector {
 	return force
 }
 
-const MAX_DISTANCE = 100
-
-var ZERO_VECTOR = Vector{x: 0, y: 0}
-
-func curvyForce(v Vector) Vector {
-
-	if v.magnitude() == 0 {
-		return WEIGHT_VECTOR
-		// return Vector{0, 0}
-		// return ZERO_VECTOR
-	}
-
-	if v.magnitude() > MAX_DISTANCE {
-		// v.normalize()
-		return WEIGHT_VECTOR
-	}
-
-	delat_theta := math.Acos(
-		dotProduct(v, WEIGHT_VECTOR) / v.magnitude() / WEIGHT_VECTOR.magnitude(),
-	)
-
-	if math.IsNaN(delat_theta) {
-		return WEIGHT_VECTOR
-	}
-
-	if delat_theta > math.Pi/4 {
-		return WEIGHT_VECTOR
-	}
-
-	weight_theta := math.Atan(WEIGHT_VECTOR.y / WEIGHT_VECTOR.x)
-
-	if WEIGHT_VECTOR.x < 0 {
-		weight_theta += math.Pi
-	}
-
-	v_theta := math.Atan(v.y / v.x)
-
-	if v.x < 0 {
-		v_theta += math.Pi
-	}
-
-	if v_theta < weight_theta {
-		delat_theta *= -1
-	}
-
-	radius_fraction := v.magnitude() / (SIZE / 2)
-
-	output := v
-
-	output.rotate(delat_theta * radius_fraction)
-
-	output.normalize()
-
-	return output
-}
-
 func mid_point() Point {
 	// mid := (size - 1) / 2
 
@@ -376,6 +320,14 @@ func gen_heart_grid(size int, radius float64) Grid {
 	}
 
 	return grid
+
+	// heart := [][]int {
+	// 	{0, 0, 1, 0, 0},
+	// 	{0, 1, 0, 1, 0},
+	// 	{1, 0, 0, 0, 1},
+	// 	{0, 1, 0, 1, 0},
+	// 	{0, 0, 1, 0, 0},
+	// }
 
 }
 
@@ -568,6 +520,7 @@ func selectProbability(probs []float64, r *rand.Rand) int {
 
 		runningProb -= probs[i]
 		if selection > runningProb {
+			// fmt.Println(selection, prob)
 			return i
 		}
 		i--
@@ -594,9 +547,12 @@ func weightedDirection(weight Vector) []float64 {
 func (m *Model) treeTick(r *rand.Rand) bool {
 
 	for i, walker := range m.walkers {
+		// fmt.Println()
+		// fmt.Printf("Walker: %v\n", walker)
 		var new_vec Vector
 		var new_point Point
 		// time.Sleep(1 * time.Millisecond)
+		// fmt.Println(walker)
 
 		// start := time.Now()
 
@@ -611,16 +567,17 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		velo := walker.velocity
 		force := WEIGHT_VECTOR
 		if LIVE_FORCE_ATTRACT {
-			// change this if u want it to be like it was before
-			force = curvyForce(walker.location)
-			// force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
+			force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
 		}
 		velo.add(force)
+		// fmt.Println(weight_vector)
+		// println()
 		// velo.add(WEIGHT_VECTOR)
 
 		// probs2 := weightedDirection(WEIGHT_VECTOR)
 
 		// for i := range probs2 {
+		// 	// fmt.Println(i)
 		//
 		// 	probs[i] += probs2[i] * 2
 		// }
@@ -632,6 +589,7 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 
 		if totalTrail > 0 {
 			for i := range UNITS {
+				// fmt.Println(i)
 
 				new_vec = add_vectors(walker.location, UNITS[i])
 
@@ -647,6 +605,8 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		}
 
 		// probs[(last_move+2)/4] = 0.0
+		// fmt.Println(probs)
+		// fmt.Println()
 
 		// selection := selectProbability(probs, r)
 
@@ -655,21 +615,24 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		// new_vec = add_vectors(walker.location, UNITS[selection])
 
 		velo.normalize()
+		// fmt.Println("velo: ", velo)
 		m.walkers[i].location.add(velo)
 		m.walkers[i].velocity = velo
 
 		quantized := m.walkers[i].location.roundToPoint()
 		*m.nextGrid.index(quantized) += 1
+		// fmt.Println(new_vec)
+		// fmt.Println("quant", quantized)
+		// fmt.Println()
 
-		// conditions to reset walkers
 		if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
 			return true
 		}
 
-		// dont split if we dont have any food / intensity ig
-		if r.Float64() < SPLIT && walker.intensity >= 2 {
+		if r.Float64() < SPLIT {
 			og := m.walkers[i]
 			newVelo := og.velocity
+			// fmt.Println("pretate:", newVelo)
 
 			if rand.Float64() < 0.5 {
 				newVelo.rotate(math.Pi / 2)
@@ -677,6 +640,8 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 				newVelo.rotate(-math.Pi / 2)
 			}
 
+			// fmt.Println("posttate:", newVelo)
+			// fmt.Println()
 			newVelo.scale(2)
 
 			m.walkers = append(
@@ -692,6 +657,7 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		}
 
 		// if *m.grid.index(walker) == Empty {
+		// 	// fmt.Println("hi")
 		// 	*m.grid.index(walker) = Filled
 
 		// if m.onPerimeter(new_point) {
@@ -1000,33 +966,48 @@ func mouseTargetVector(cursorX, cursorY, width, height int) Vector {
 	return Vector{x: x, y: y}
 }
 
+// if we r still processing the last frame dont do more computations
+var COMPUTING bool = false
+
 func (g *LiveGame) Update() error {
+	if COMPUTING {
+		fmt.Println("im the problem")
+		return nil
+	}
+
+	COMPUTING = true
 
 	w, h := ebiten.WindowSize()
 	x, y := ebiten.CursorPosition()
-	fmt.Println(x, y)
 
 	LIVE_MOUSE_TARGET = mouseTargetVector(x, y, w, h)
-	WEIGHT_VECTOR = LIVE_MOUSE_TARGET
-	//uhhh
-	WEIGHT_VECTOR.normalize()
-	// WEIGHT_VECTOR = mouseWeightVector(x, y, w, h)
+	WEIGHT_VECTOR = mouseWeightVector(x, y, w, h)
 
 	// Take multiple simulation steps per frame to keep visible growth speed.
-	for range 1 {
+	for range 3 {
 		if g.step() {
 			g.reset()
 			break
 		}
 	}
 
+	COMPUTING = false
+
 	return nil
 	// return errors.New("bruh")
 }
 
+var DRAWING bool = false
+
 func (g *LiveGame) Draw(screen *ebiten.Image) {
+	if DRAWING {
+		return
+	}
+	DRAWING = true
 	frame := grid2png(g.model.grid)
 	screen.WritePixels(frame.Pix)
+	DRAWING = false
+
 }
 
 func (g *LiveGame) Layout(outsideWidth, outsideHeight int) (int, int) {
