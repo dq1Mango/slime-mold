@@ -74,16 +74,17 @@ var StateColor = map[SiteState]color.NRGBA{
 
 type Grid [][]SiteState
 
+// these field r now exported to get json-ed
 type Point struct {
-	x int
-	y int
+	X int
+	Y int
 }
 
 var CARDINALS = []Point{
-	{x: 1, y: 0},
-	{x: 0, y: 1},
-	{x: -1, y: 0},
-	{x: 0, y: -1},
+	{X: 1, Y: 0},
+	{X: 0, Y: 1},
+	{X: -1, Y: 0},
+	{X: 0, Y: -1},
 }
 
 type Vector struct {
@@ -146,8 +147,8 @@ func (v *Vector) normalize() {
 
 func vectorFromPoint(p Point) Vector {
 	return Vector{
-		x: float64(p.x),
-		y: float64(p.y),
+		x: float64(p.X),
+		y: float64(p.Y),
 	}
 }
 
@@ -248,18 +249,18 @@ func curvyForce(v Vector) Vector {
 func mid_point() Point {
 	// mid := (size - 1) / 2
 
-	return Point{x: 0, y: 0}
+	return Point{X: 0, Y: 0}
 }
 
 func real_mid_point(size int) Point {
 
 	mid := (size - 1) / 2
 
-	return Point{x: mid, y: mid}
+	return Point{X: mid, Y: mid}
 }
 
 func add_points(p1, p2 Point) Point {
-	return Point{x: p1.x + p2.x, y: p1.y + p2.y}
+	return Point{X: p1.X + p2.X, Y: p1.Y + p2.Y}
 }
 
 func add_vectors(v1, v2 Vector) Vector {
@@ -281,7 +282,7 @@ func abs(x int) int {
 }
 
 func (p *Point) radius() int {
-	return max(abs(p.x), abs(p.y))
+	return max(abs(p.X), abs(p.Y))
 }
 
 type Walker struct {
@@ -369,7 +370,7 @@ func gen_heart_grid(size int, radius float64) Grid {
 		t := float64(i) / float64(points) * 2 * math.Pi
 
 		x, y := heart_equation(t)
-		point := Point{x: int(math.Round(x * radius)), y: int(math.Round(y * radius))}
+		point := Point{X: int(math.Round(x * radius)), Y: int(math.Round(y * radius))}
 
 		*grid.index(point) = Filled
 
@@ -380,21 +381,21 @@ func gen_heart_grid(size int, radius float64) Grid {
 }
 
 func (g Grid) raw_index(point Point) *SiteState {
-	return &g[point.y][point.x]
+	return &g[point.Y][point.X]
 }
 
 func (g Grid) index(point Point) *SiteState {
 	radius := len(g) / 2
-	point.x = max(-radius, min(radius, point.x))
-	point.y = max(-radius, min(radius, point.y))
-	point.y *= -1
+	point.X = max(-radius, min(radius, point.X))
+	point.Y = max(-radius, min(radius, point.Y))
+	point.Y *= -1
 	real_point := add_points(point, real_mid_point(len(g)))
 
-	return &g[real_point.y][real_point.x]
+	return &g[real_point.Y][real_point.X]
 }
 
 func (v *Vector) roundToPoint() Point {
-	return Point{x: round(v.x), y: round(v.y)}
+	return Point{X: round(v.x), Y: round(v.y)}
 }
 
 func (g Grid) vectorIndex(vector Vector) *SiteState {
@@ -408,7 +409,7 @@ func (g *Grid) is_valid_point(point Point) bool {
 
 	radius := len(*g) / 2
 
-	if point.x >= -radius && point.x <= radius && point.y >= -radius && point.y <= radius {
+	if point.X >= -radius && point.X <= radius && point.Y >= -radius && point.Y <= radius {
 		return true
 	} else {
 		return false
@@ -429,13 +430,13 @@ func random_step(r *rand.Rand) Point {
 	value := r.Float64()
 
 	if value < 0.25 {
-		return Point{x: 1, y: 0}
+		return Point{X: 1, Y: 0}
 	} else if value < 0.5 {
-		return Point{x: -1, y: 0}
+		return Point{X: -1, Y: 0}
 	} else if value < 0.75 {
-		return Point{x: 0, y: 1}
+		return Point{X: 0, Y: 1}
 	} else {
-		return Point{x: 0, y: -1}
+		return Point{X: 0, Y: -1}
 	}
 
 }
@@ -488,7 +489,7 @@ func init_model(size int, _ float64, distance int) Model {
 }
 
 func (m *Model) origin() Point {
-	return Point{x: 0, y: 0}
+	return Point{X: 0, Y: 0}
 }
 
 func (m *Model) countNeibors(point Point) int {
@@ -506,7 +507,7 @@ func (m *Model) countNeibors(point Point) int {
 func (m *Model) onPerimeter(point Point) bool {
 
 	radius := (m.size-1)/2 - 1
-	if point.x == radius || point.x == -radius || point.y == radius || point.y == -radius {
+	if point.X == radius || point.X == -radius || point.Y == radius || point.Y == -radius {
 		return true
 	} else {
 		return false
@@ -524,10 +525,10 @@ func (m *Model) countOnRadius(radius int) int {
 	for i := range radius*2 + 1 {
 		i -= radius
 
-		if *m.grid.index(Point{x: i, y: -radius}) > 0 {
+		if *m.grid.index(Point{X: i, Y: -radius}) > 0 {
 			count++
 		}
-		if *m.grid.index(Point{x: i, y: radius}) > 0 {
+		if *m.grid.index(Point{X: i, Y: radius}) > 0 {
 			count++
 		}
 	}
@@ -535,10 +536,10 @@ func (m *Model) countOnRadius(radius int) int {
 	for i := range radius*2 - 1 {
 		i -= radius
 
-		if *m.grid.index(Point{x: -radius, y: i}) > 0 {
+		if *m.grid.index(Point{X: -radius, Y: i}) > 0 {
 			count++
 		}
-		if *m.grid.index(Point{x: radius, y: i}) > 0 {
+		if *m.grid.index(Point{X: radius, Y: i}) > 0 {
 			count++
 		}
 	}
@@ -786,24 +787,6 @@ func run_simulation() stats.Series {
 	// pretty_picture(model, "testing", 5)
 	return series
 
-}
-
-func testing() {
-
-	// for
-	// // data := []int{0, 1, 2, 3}
-	// point := Point{row: 1, col: 1}
-	// data := []Point{point, point}
-	//
-	// // for _, idk := range data {
-	// // 	idk = 67
-	// // }
-	//
-	// // data = unordered_remove(data, 1)
-	//
-	// data[0].row = 2
-	//
-	// fmt.Println(data)
 }
 
 type DataPoint struct {
