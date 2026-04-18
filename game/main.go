@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	_ "image/png"
 	"math"
 	"math/rand"
 	"slices"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
+	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/montanaflynn/stats"
 	// "slices"
 )
@@ -28,21 +30,26 @@ const (
 	FPS         = 20.0
 	SCREEN_SIZE = 960
 	LIVE_PULL   = 0.2
+
+	// game ticks per second
+	TPS = 20
+	// DELAY = 1 / TPS
 )
 
 var WEIGHT_VECTOR = Vector{x: -1, y: 1}
 var LIVE_FORCE_ATTRACT = false
 var LIVE_MOUSE_TARGET = Vector{x: 0, y: 0}
 
+var OatImage *ebiten.Image
+
 type SiteState int
 
 const (
 	Empty SiteState = iota
 	Filled
+
 	Origin SiteState = -2
 	Active SiteState = -1
-	// Visited
-	// Immune
 )
 
 var StateColor = map[SiteState]color.NRGBA{
@@ -922,16 +929,44 @@ func renderProgressBar(series stats.Series) {
 	fmt.Println(strings.Repeat("-", barWidth+20))
 }
 
+// right now all the globals arent actually here
+// maybe they should be or maybe this should have a different name
+func initGlobals() {
+
+	// data, err := os.ReadFile("../assests/oat.png")
+	//
+	// if err != nil {
+	// 	panic(err)
+	// }
+	//
+	// img, _, err := image.Decode(bytes.NewReader(data))
+	//
+	// if err != nil {
+	// 	log.Fatal(err)
+	// }
+
+	var err error
+	OatImage, _, err = ebitenutil.NewImageFromFile("../assests/oat.png")
+	if err != nil {
+		panic(err)
+	}
+}
+
 type LiveGame struct {
 	model    Model
+	theMap   *Map
 	rng      *rand.Rand
 	p        float64
 	distance int
 }
 
 func newLiveGame(p float64, distance int) *LiveGame {
+
+	initGlobals()
+
 	return &LiveGame{
 		model:    init_model(SIZE, p, distance),
+		theMap:   defualtMap(),
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		p:        p,
 		distance: distance,
@@ -987,7 +1022,6 @@ func (g *LiveGame) Update() error {
 
 	w, h := ebiten.WindowSize()
 	x, y := ebiten.CursorPosition()
-	fmt.Println(x, y)
 
 	LIVE_MOUSE_TARGET = mouseTargetVector(x, y, w, h)
 	WEIGHT_VECTOR = LIVE_MOUSE_TARGET
@@ -1008,8 +1042,24 @@ func (g *LiveGame) Update() error {
 }
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
-	frame := grid2png(g.model.grid)
-	screen.WritePixels(frame.Pix)
+
+	opts := &ebiten.DrawImageOptions{}
+	opts.GeoM.Scale(0.1, 0.1)
+	screen.DrawImage(OatImage, opts)
+
+	// this should be made a bg image istead of making it every frame
+	// for _, food := range g.theMap.Foods {
+	// 	opts := &ebiten.DrawImageOptions{}
+	// 	opts.GeoM.Translate(
+	// 		float64(food.Position.X*SCREEN_SIZE)/SIZE/2,
+	// 		float64(food.Position.Y*SCREEN_SIZE)/SIZE/2,
+	// 	)
+	// 	// opts.GeoM.Translate(SCREEN_SIZE/SIZE, SCREEN_SIZE/SIZE)
+	// 	screen.DrawImage(OatImage, opts)
+	// }
+
+	copyGrid2Image(g.model.grid, screen)
+	// screen.WritePixels(frame.Pix)
 }
 
 func (g *LiveGame) Layout(outsideWidth, outsideHeight int) (int, int) {
@@ -1019,6 +1069,8 @@ func (g *LiveGame) Layout(outsideWidth, outsideHeight int) (int, int) {
 }
 
 func runLive() {
+	ebiten.SetTPS(TPS)
+
 	game := newLiveGame(0.1, 20)
 	LIVE_FORCE_ATTRACT = true
 
@@ -1042,7 +1094,7 @@ func main() {
 	// var data stats.Series
 
 	// args := parse_args()
-	time.Sleep(time.Second * 4)
+	// time.Sleep(time.Second * 4)
 	runLive()
 
 	// outputName := *args.output
@@ -1075,6 +1127,50 @@ func calc_color(percent float64) color.NRGBA {
 		A: 255,
 		// A: uint8(int(color_start.A) + round(float64(color_end.A-color_start.A)*percent)),
 	}
+}
+
+func copyGrid2Image(grid Grid, image *ebiten.Image) {
+	size := len(grid)
+	screen_size := 960
+
+	scale := screen_size / size
+
+	largest := 0.0
+	for _, row := range grid {
+		for _, value := range row {
+			if float64(value) > largest {
+				largest = float64(value)
+			}
+		}
+	}
+
+	*grid.index(mid_point()) = Origin
+
+	// cropped := model.size - model.distance*2
+
+	// for y, row := range grid[model.distance : model.size-model.distance] {
+	// 	for x, value := range row[model.distance : model.size-model.distance] {
+	for y, row := range grid {
+		for x, value := range row {
+
+			var color color.Color
+			if value < 0 {
+				color = StateColor[value]
+			} else if value > 0 {
+				color = calc_color(float64(value) / largest)
+			} else {
+				continue
+			}
+
+			// image.WritePixels()
+			for i := range scale {
+				for j := range scale {
+					image.Set(x*scale+j, y*scale+i, color)
+				}
+			}
+		}
+	}
+
 }
 
 func grid2png(grid Grid) *image.NRGBA {
