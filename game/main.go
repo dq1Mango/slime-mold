@@ -39,6 +39,7 @@ const (
 var WEIGHT_VECTOR = Vector{x: -1, y: 1}
 var LIVE_FORCE_ATTRACT = false
 var LIVE_MOUSE_TARGET = Vector{x: 0, y: 0}
+var LIVE_MOUSE_POINT = Point{X: 0, Y: 0}
 
 var OatImage *ebiten.Image
 
@@ -201,40 +202,45 @@ const MAX_DISTANCE = 100
 
 var ZERO_VECTOR = Vector{x: 0, y: 0}
 
-func curvyForce(v Vector) Vector {
+func curvyForce(relativePos, weight Vector) Vector {
 
-	if v.magnitude() == 0 {
-		return WEIGHT_VECTOR
+	weight.normalize()
+
+	if relativePos.magnitude() == 0 {
+		return weight
 		// return Vector{0, 0}
 		// return ZERO_VECTOR
 	}
 
-	if v.magnitude() > MAX_DISTANCE {
+	if relativePos.magnitude() > MAX_DISTANCE {
 		// v.normalize()
-		return WEIGHT_VECTOR
+		return weight
 	}
 
 	delat_theta := math.Acos(
-		dotProduct(v, WEIGHT_VECTOR) / v.magnitude() / WEIGHT_VECTOR.magnitude(),
+		dotProduct(
+			relativePos,
+			weight,
+		) / relativePos.magnitude() / weight.magnitude(),
 	)
 
 	if math.IsNaN(delat_theta) {
-		return WEIGHT_VECTOR
+		return weight
 	}
 
 	if delat_theta > math.Pi/4 {
-		return WEIGHT_VECTOR
+		return weight
 	}
 
-	weight_theta := math.Atan(WEIGHT_VECTOR.y / WEIGHT_VECTOR.x)
+	weight_theta := math.Atan(weight.y / weight.x)
 
-	if WEIGHT_VECTOR.x < 0 {
+	if weight.x < 0 {
 		weight_theta += math.Pi
 	}
 
-	v_theta := math.Atan(v.y / v.x)
+	v_theta := math.Atan(relativePos.y / relativePos.x)
 
-	if v.x < 0 {
+	if relativePos.x < 0 {
 		v_theta += math.Pi
 	}
 
@@ -242,9 +248,9 @@ func curvyForce(v Vector) Vector {
 		delat_theta *= -1
 	}
 
-	radius_fraction := v.magnitude() / (SIZE / 2)
+	radius_fraction := relativePos.magnitude() / (SIZE / 2)
 
-	output := v
+	output := relativePos
 
 	output.rotate(delat_theta * radius_fraction)
 
@@ -254,9 +260,9 @@ func curvyForce(v Vector) Vector {
 }
 
 func mid_point() Point {
-	// mid := (size - 1) / 2
+	mid := (SIZE - 1) / 2
 
-	return Point{X: 0, Y: 0}
+	return Point{X: mid, Y: mid}
 }
 
 func real_mid_point(size int) Point {
@@ -309,6 +315,7 @@ type Model struct {
 	walkers  []TreeWalker
 	grids    []Grid
 	size     int
+	spawn    Vector
 	// p        float64
 	// people   int
 	// infected int
@@ -392,13 +399,17 @@ func (g Grid) raw_index(point Point) *SiteState {
 }
 
 func (g Grid) index(point Point) *SiteState {
-	radius := len(g) / 2
-	point.X = max(-radius, min(radius, point.X))
-	point.Y = max(-radius, min(radius, point.Y))
-	point.Y *= -1
-	real_point := add_points(point, real_mid_point(len(g)))
+	// radius := len(g) / 2
+	// point.X = max(-radius, min(radius, point.X))
+	// point.Y = max(-radius, min(radius, point.Y))
+	// point.Y *= -1
 
-	return &g[real_point.Y][real_point.X]
+	point.X = max(0, min(len(g), point.X))
+	point.Y = max(0, min(len(g), point.Y))
+
+	// real_point := add_points(point, real_mid_point(len(g)))
+
+	return &g[point.Y][point.X]
 }
 
 func (v *Vector) roundToPoint() Point {
@@ -488,6 +499,7 @@ func init_model(size int, _ float64, distance int) Model {
 		walkers:  []TreeWalker{{location: vectorFromPoint(mid_point()), intensity: 100}},
 		grids:    make([]Grid, 0, 100),
 		size:     size,
+		spawn:    Vector{50, 50},
 		time:     0,
 	}
 
@@ -513,8 +525,14 @@ func (m *Model) countNeibors(point Point) int {
 
 func (m *Model) onPerimeter(point Point) bool {
 
-	radius := (m.size-1)/2 - 1
-	if point.X == radius || point.X == -radius || point.Y == radius || point.Y == -radius {
+	// radius := (m.size-1)/2 - 1
+	// if point.X == radius || point.X == -radius || point.Y == radius || point.Y == -radius {
+	// 	return true
+	// } else {
+	// 	return false
+	// }
+
+	if point.X == 1 || point.X == m.size-2 || point.Y == 1 || point.Y == m.size-2 {
 		return true
 	} else {
 		return false
@@ -601,6 +619,8 @@ func weightedDirection(weight Vector) []float64 {
 
 func (m *Model) treeTick(r *rand.Rand) bool {
 
+	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), m.spawn)
+
 	for i, walker := range m.walkers {
 		var new_vec Vector
 		var new_point Point
@@ -617,10 +637,12 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		// direction := CARDINALS[index]
 
 		velo := walker.velocity
-		force := WEIGHT_VECTOR
+		force := mouseTarget
+		force.normalize()
 		if LIVE_FORCE_ATTRACT {
+
 			// change this if u want it to be like it was before
-			force = curvyForce(walker.location)
+			force = curvyForce(subtract(walker.location, m.spawn), mouseTarget)
 			// force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
 		}
 		velo.add(force)
@@ -670,7 +692,9 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		*m.nextGrid.index(quantized) += 1
 
 		// conditions to reset walkers
-		if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
+		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
+		if m.onPerimeter(quantized) ||
+			distance(m.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
 			return true
 		}
 
@@ -1018,15 +1042,21 @@ func mouseTargetVector(cursorX, cursorY, width, height int) Vector {
 	return Vector{x: x, y: y}
 }
 
+func mouseTargetPoint(cursorX, cursorY, width, height int) Point {
+	return Point{X: cursorX * SIZE / width, Y: cursorY * SIZE / height}
+}
+
 func (g *LiveGame) Update() error {
 
 	w, h := ebiten.WindowSize()
 	x, y := ebiten.CursorPosition()
 
-	LIVE_MOUSE_TARGET = mouseTargetVector(x, y, w, h)
-	WEIGHT_VECTOR = LIVE_MOUSE_TARGET
+	// LIVE_MOUSE_TARGET = mouseTargetVector(x, y, w, h)
+	LIVE_MOUSE_POINT = mouseTargetPoint(x, y, w, h)
+	fmt.Println(LIVE_MOUSE_POINT)
+	// WEIGHT_VECTOR = vectorFromPoint(LIVE_MOUSE_POINT)
 	//uhhh
-	WEIGHT_VECTOR.normalize()
+	// WEIGHT_VECTOR.normalize()
 	// WEIGHT_VECTOR = mouseWeightVector(x, y, w, h)
 
 	// Take multiple simulation steps per frame to keep visible growth speed.
