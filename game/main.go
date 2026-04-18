@@ -15,6 +15,7 @@ import (
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
+	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/montanaflynn/stats"
 	// "slices"
 )
@@ -326,16 +327,19 @@ type Model struct {
 	// distance int
 }
 
+func (m *Model) spawnWalker() {
+	middle := mid_point()
+	m.walkers = append(m.walkers, TreeWalker{location: vectorFromPoint(middle), intensity: 100})
+}
+
+func (m *Model) clear() {
+	m.grid = gen_grid(m.size)
+	// m.nextGrid = gen_grid(m.size)
+	m.walkers = []TreeWalker{}
+}
+
 // func remove[T any](slice []T, s int) []T {
 // 	return slices.Delete(slice, s, s+1)
-// }
-
-// // this isnt dumb at all
-// type Walkers []Walker
-//
-// func (w Walkers) remove(i int) {
-// 	w[i] = w[len(w)-1]
-// 	w = w[:len(w)-1]
 // }
 
 func gen_grid(size int) Grid {
@@ -498,11 +502,12 @@ func init_model(size int, _ float64, distance int) Model {
 	model := Model{
 		grid:     grid,
 		nextGrid: nextgrid,
-		walkers:  []TreeWalker{{location: vectorFromPoint(mid_point()), intensity: 100}},
-		grids:    make([]Grid, 0, 100),
-		size:     size,
-		spawn:    Vector{50, 50},
-		time:     0,
+		// walkers:  []TreeWalker{{location: vectorFromPoint(mid_point()), intensity: 100}},
+		walkers: []TreeWalker{},
+		grids:   make([]Grid, 0, 100),
+		size:    size,
+		spawn:   Vector{50, 50},
+		time:    0,
 	}
 
 	return model
@@ -534,7 +539,7 @@ func (m *Model) onPerimeter(point Point) bool {
 	// 	return false
 	// }
 
-	if point.X == 1 || point.X == m.size-2 || point.Y == 1 || point.Y == m.size-2 {
+	if point.X <= 1 || point.X >= m.size-2 || point.Y <= 1 || point.Y >= m.size-2 {
 		return true
 	} else {
 		return false
@@ -624,19 +629,12 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), m.spawn)
 
 	for i, walker := range m.walkers {
+		if walker.intensity < 1 {
+			continue
+		}
+
 		var new_vec Vector
 		var new_point Point
-		// time.Sleep(1 * time.Millisecond)
-
-		// start := time.Now()
-
-		// step := random_step(r)
-
-		// index := r.Int63n(4)
-		// if index == 3 {
-		// 	continue
-		// }
-		// direction := CARDINALS[index]
 
 		velo := walker.velocity
 		force := mouseTarget
@@ -649,13 +647,6 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		}
 		velo.add(force)
 		// velo.add(WEIGHT_VECTOR)
-
-		// probs2 := weightedDirection(WEIGHT_VECTOR)
-
-		// for i := range probs2 {
-		//
-		// 	probs[i] += probs2[i] * 2
-		// }
 
 		totalTrail := 0.0
 		for _, bird := range UNITS {
@@ -678,12 +669,6 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 			}
 		}
 
-		// probs[(last_move+2)/4] = 0.0
-
-		// selection := selectProbability(probs, r)
-
-		// last_move = selection
-
 		// new_vec = add_vectors(walker.location, UNITS[selection])
 
 		velo.normalize()
@@ -691,13 +676,27 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		m.walkers[i].velocity = velo
 
 		quantized := m.walkers[i].location.roundToPoint()
+
 		*m.nextGrid.index(quantized) += 1
+		// i think this is the next thing to work on
+		// we need to find some model the walkers loosing intensity as they walk
+		//
+
+		// girdValue := *m.nextGrid.index(quantized)
+		// if girdValue == 0 {
+		// 	*m.nextGrid.index(quantized) += 1
+		// 	m.walkers[i].intensity -= 1
+		//
+		// }
 
 		// conditions to reset walkers
 		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
 		if m.onPerimeter(quantized) ||
 			distance(m.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
-			return true
+			// m.walkers = slices.Delete(m.walkers, i, i+1)
+			m.walkers[i].intensity = 0
+			continue
+			// return true
 		}
 
 		// dont split if we dont have any food / intensity ig
@@ -1048,7 +1047,16 @@ func mouseTargetPoint(cursorX, cursorY, width, height int) Point {
 	return Point{X: cursorX * GRID_SIZE / width, Y: cursorY * GRID_SIZE / height}
 }
 
+// there should probably be a dedicated input handling function
 func (g *LiveGame) Update() error {
+
+	if inpututil.IsKeyJustPressed(ebiten.KeyC) {
+		g.model.clear()
+	}
+
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+		g.model.spawnWalker()
+	}
 
 	w, h := ebiten.WindowSize()
 	x, y := ebiten.CursorPosition()
@@ -1066,7 +1074,7 @@ func (g *LiveGame) Update() error {
 	// Take multiple simulation steps per frame to keep visible growth speed.
 	for range 1 {
 		if g.step() {
-			g.reset()
+			// g.reset()
 			break
 		}
 	}
@@ -1077,6 +1085,7 @@ func (g *LiveGame) Update() error {
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
 
+	ebitenutil.DebugPrint(screen, "Click to spawn\nC to clear")
 	// fmt.Println(screen)
 
 	// opts := &ebiten.DrawImageOptions{}
