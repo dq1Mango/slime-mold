@@ -62,7 +62,7 @@ func defaulDangerGradient() func(v Vector) float64 {
 			return 0
 		}
 
-		return v.magnitude() / (math.Sqrt2 * SIZE)
+		return v.magnitude() / (math.Sqrt2 * GRID_SIZE)
 
 	}
 }

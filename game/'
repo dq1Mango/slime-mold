@@ -6,6 +6,7 @@ import (
 	"image"
 	"image/color"
 	_ "image/png"
+	"log"
 	"log/slog"
 	"math"
 	"math/rand"
@@ -1053,11 +1054,11 @@ func (g *LiveGame) Update() error {
 	w, h := ebiten.WindowSize()
 	x, y := ebiten.CursorPosition()
 
-	// fmt.Println(w, h, x, y)
+	fmt.Println(w, h, x, y)
 
 	// LIVE_MOUSE_TARGET = mouseTargetVector(x, y, w, h)
 	LIVE_MOUSE_POINT = mouseTargetPoint(x, y, w, h)
-	// fmt.Println(LIVE_MOUSE_POINT)
+	fmt.Println(LIVE_MOUSE_POINT)
 	// WEIGHT_VECTOR = vectorFromPoint(LIVE_MOUSE_POINT)
 	//uhhh
 	// WEIGHT_VECTOR.normalize()
@@ -1137,8 +1138,6 @@ func runLive() {
 
 func main() {
 
-	// u kind of dont need this slog.Warn cuz the compiler gets mad
-	// if SCALE isn't a whole number
 	if float64(int(SCALE)) != SCALE {
 		slog.Warn(
 			"Screen Size is not divisible by Grid Size\n",
