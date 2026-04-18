@@ -7,7 +7,7 @@ import (
 
 func TestMapStuff(t *testing.T) {
 
-	theMap := defualtMap()
+	theMap := defaultMap()
 
 	theMap.writeMap(MAP_PATH + "default.json")
 

@@ -990,7 +990,7 @@ func newLiveGame(p float64, distance int) *LiveGame {
 
 	return &LiveGame{
 		model:    init_model(SIZE, p, distance),
-		theMap:   defualtMap(),
+		theMap:   defaultMap(),
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		p:        p,
 		distance: distance,
@@ -1073,20 +1073,31 @@ func (g *LiveGame) Update() error {
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
 
-	opts := &ebiten.DrawImageOptions{}
-	opts.GeoM.Scale(0.1, 0.1)
-	screen.DrawImage(OatImage, opts)
+	// fmt.Println(screen)
+
+	// opts := &ebiten.DrawImageOptions{}
+	// opts.GeoM.Scale(0.1, 0.1)
+	// opts.GeoM.Translate(SCREEN_SIZE/2, SCREEN_SIZE/2)
+	// screen.DrawImage(OatImage, opts)
+	//
+	scale := 0.1
 
 	// this should be made a bg image istead of making it every frame
-	// for _, food := range g.theMap.Foods {
-	// 	opts := &ebiten.DrawImageOptions{}
-	// 	opts.GeoM.Translate(
-	// 		float64(food.Position.X*SCREEN_SIZE)/SIZE/2,
-	// 		float64(food.Position.Y*SCREEN_SIZE)/SIZE/2,
-	// 	)
-	// 	// opts.GeoM.Translate(SCREEN_SIZE/SIZE, SCREEN_SIZE/SIZE)
-	// 	screen.DrawImage(OatImage, opts)
-	// }
+	for _, food := range g.theMap.Foods {
+		// size := OatImage.Bounds().Size().X
+		opts := &ebiten.DrawImageOptions{}
+		// fmt.Println("ycoord; ", float64(food.Position.X*SCREEN_SIZE)/SIZE)
+		opts.GeoM.Scale(scale, scale)
+		opts.GeoM.Translate(
+			float64(food.Position.X*SCREEN_SIZE)/SIZE,
+			float64(food.Position.Y*SCREEN_SIZE)/SIZE)
+		// opts.GeoM.Translate(
+		// 	float64(food.Position.X*SCREEN_SIZE)/SIZE/2,
+		// 	float64(food.Position.Y*SCREEN_SIZE)/SIZE,
+		// )
+		// opts.GeoM.Translate(SCREEN_SIZE/SIZE, SCREEN_SIZE/SIZE)
+		screen.DrawImage(OatImage, opts)
+	}
 
 	copyGrid2Image(g.model.grid, screen)
 	// screen.WritePixels(frame.Pix)
@@ -1126,25 +1137,6 @@ func main() {
 	// args := parse_args()
 	// time.Sleep(time.Second * 4)
 	runLive()
-
-	// outputName := *args.output
-	// if outputName == "" {
-	// 	outputName = "testing"
-	// 	fmt.Println("no -out provided, defaulting to:", outputName)
-	// }
-	//
-	// if *args.chart == "progress" {
-	// 	data = run_simulation()
-	// 	renderProgressBar(data)
-	// 	return
-	// }
-	//
-	// if *args.live {
-	// 	runLive()
-	// 	return
-	// }
-
-	// one_trial(outputName)
 
 }
 
