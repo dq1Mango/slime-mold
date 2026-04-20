@@ -21,7 +21,7 @@ import (
 )
 
 const END_RATIO = 0.01
-const GRID_SIZE = 101
+const GRID_SIZE = 200
 
 const SACRIFICE = 0.01
 const SELFISH = 0.9
@@ -30,7 +30,7 @@ const SPLIT = 0.1
 
 const (
 	FPS         = 20.0
-	SCREEN_SIZE = 1010
+	SCREEN_SIZE = 1000
 	SCALE       = float64(SCREEN_SIZE) / GRID_SIZE
 	LIVE_PULL   = 0.2
 
@@ -344,9 +344,9 @@ func (m *Model) clear() {
 
 func gen_grid(size int) Grid {
 
-	if size%2 == 0 {
-		panic("grid size must be odd you doofus")
-	}
+	// if size%2 == 0 {
+	// 	panic("grid size must be odd you doofus")
+	// }
 
 	grid := make(Grid, size)
 
@@ -467,9 +467,9 @@ func random_step(r *rand.Rand) Point {
 
 func init_model(size int, _ float64, distance int) Model {
 
-	if size%2 == 0 {
-		panic("grid size must be odd you doofus")
-	}
+	// if size%2 == 0 {
+	// 	panic("grid size must be odd you doofus")
+	// }
 
 	if distance <= 0 {
 		panic("spawning distacne must be non-negative")
@@ -638,13 +638,13 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 
 		velo := walker.velocity
 		force := mouseTarget
-		force.normalize()
 		if LIVE_FORCE_ATTRACT {
-
+			force = subtract(force, m.spawn)
 			// change this if u want it to be like it was before
-			force = curvyForce(subtract(walker.location, m.spawn), mouseTarget)
+			// force = curvyForce(subtract(walker.location, m.spawn), mouseTarget)
 			// force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
 		}
+		force.normalize()
 		velo.add(force)
 		// velo.add(WEIGHT_VECTOR)
 
@@ -677,17 +677,17 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 
 		quantized := m.walkers[i].location.roundToPoint()
 
-		*m.nextGrid.index(quantized) += 1
+		// *m.nextGrid.index(quantized) += 1
 		// i think this is the next thing to work on
 		// we need to find some model the walkers loosing intensity as they walk
 		//
 
-		// girdValue := *m.nextGrid.index(quantized)
-		// if girdValue == 0 {
-		// 	*m.nextGrid.index(quantized) += 1
-		// 	m.walkers[i].intensity -= 1
-		//
-		// }
+		girdValue := *m.nextGrid.index(quantized)
+		if girdValue == 0 {
+			*m.nextGrid.index(quantized) += 1
+			m.walkers[i].intensity -= 1
+
+		}
 
 		// conditions to reset walkers
 		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
@@ -700,29 +700,29 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		}
 
 		// dont split if we dont have any food / intensity ig
-		if r.Float64() < SPLIT && walker.intensity >= 2 {
-			og := m.walkers[i]
-			newVelo := og.velocity
-
-			if rand.Float64() < 0.5 {
-				newVelo.rotate(math.Pi / 2)
-			} else {
-				newVelo.rotate(-math.Pi / 2)
-			}
-
-			newVelo.scale(2)
-
-			m.walkers = append(
-				m.walkers,
-				TreeWalker{
-					location:  add_vectors(og.location, newVelo),
-					intensity: og.intensity / 2,
-					velocity:  newVelo,
-				},
-			)
-
-			m.walkers[i].intensity /= 2
-		}
+		// if r.Float64() < SPLIT && walker.intensity >= 2 {
+		// 	og := m.walkers[i]
+		// 	newVelo := og.velocity
+		//
+		// 	if rand.Float64() < 0.5 {
+		// 		newVelo.rotate(math.Pi / 2)
+		// 	} else {
+		// 		newVelo.rotate(-math.Pi / 2)
+		// 	}
+		//
+		// 	newVelo.scale(2)
+		//
+		// 	m.walkers = append(
+		// 		m.walkers,
+		// 		TreeWalker{
+		// 			location:  add_vectors(og.location, newVelo),
+		// 			intensity: og.intensity / 2,
+		// 			velocity:  newVelo,
+		// 		},
+		// 	)
+		//
+		// 	m.walkers[i].intensity /= 2
+		// }
 
 		// if *m.grid.index(walker) == Empty {
 		// 	*m.grid.index(walker) = Filled
