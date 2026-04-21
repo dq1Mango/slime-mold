@@ -69,8 +69,8 @@ func defaulDangerGradient() func(v Vector) float64 {
 
 func defaultMap() *Map {
 
-	Spawn1 := Point{-50, 0}
-	Spawn2 := Point{50, 0}
+	Spawn1 := Point{50, 100}
+	Spawn2 := Point{150, 100}
 	// Spawn1Vec := vectorFromPoint(Spawn1)
 	// Spawn2Vec := vectorFromPoint(Spawn2)
 

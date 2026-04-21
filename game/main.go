@@ -326,31 +326,44 @@ type TreeWalker struct {
 	velocity  Vector
 }
 
+type Player struct {
+	walkers []TreeWalker
+	spawn   Vector
+}
+
 type Model struct {
 	grid     Grid
 	nextGrid Grid
-	walkers  []TreeWalker
-	grids    []Grid
-	size     int
-	spawn    Vector
-	// p        float64
-	// people   int
-	// infected int
-	radius int
-	time   int
-	// distance int
+
+	players []Player
+
+	size int
+	time int
 }
 
-func (m *Model) spawnWalker() {
-	middle := mid_point()
-	m.walkers = append(m.walkers, TreeWalker{location: vectorFromPoint(middle), intensity: 100})
+func (m *Model) spawnWalker(playerIndex int) {
+	// middle := mid_point()
+
+	player := &m.players[playerIndex]
+	player.walkers = append(
+		player.walkers,
+		TreeWalker{location: player.spawn, intensity: 100},
+	)
+
+	fmt.Println(len(m.players[playerIndex].walkers))
 }
 
 func (m *Model) clear() {
 	m.grid = gen_grid(m.size)
-	// m.nextGrid = gen_grid(m.size)
-	m.walkers = []TreeWalker{}
+
+	for i := range m.players {
+		m.players[i].walkers = []TreeWalker{}
+
+	}
 }
+
+// m.nextGrid = gen_grid(m.size)
+// player.walkers = }
 
 // func remove[T any](slice []T, s int) []T {
 // 	return slices.Delete(slice, s, s+1)
@@ -378,40 +391,6 @@ func gen_grid(size int) Grid {
 
 func round(x float64) int {
 	return int(math.Round(x))
-}
-
-func heart_equation(t float64) (float64, float64) {
-	x := 16 * math.Pow(math.Sin(t), 3)
-	y := 13*math.Cos(t) - 5*math.Cos(2*t) - 2*math.Cos(3*t) - math.Cos(4*t)
-
-	y /= -15
-	x /= 15
-
-	return x, y
-}
-
-func gen_heart_grid(size int, radius float64) Grid {
-
-	if int(radius) > size/2 {
-		panic(fmt.Errorf("ahhhhh: radius too large for grid size"))
-	}
-
-	grid := gen_grid(size)
-
-	points := 1000
-
-	for i := range points {
-		t := float64(i) / float64(points) * 2 * math.Pi
-
-		x, y := heart_equation(t)
-		point := Point{X: int(math.Round(x * radius)), Y: int(math.Round(y * radius))}
-
-		*grid.index(point) = Filled
-
-	}
-
-	return grid
-
 }
 
 func (g Grid) raw_index(point Point) *SiteState {
@@ -479,49 +458,24 @@ func random_step(r *rand.Rand) Point {
 
 }
 
-func init_model(size int, _ float64, distance int) Model {
-
-	// if size%2 == 0 {
-	// 	panic("grid size must be odd you doofus")
-	// }
-
-	if distance <= 0 {
-		panic("spawning distacne must be non-negative")
-	}
-
-	// grid_type := "normal"
-	// grid_type := "heart"
-	heart := false
+func init_model(size int) Model {
 
 	var grid Grid
 	var nextgrid Grid
-	if !heart {
-		grid = gen_grid(size)
-		*grid.index(mid_point()) = Filled
 
-		nextgrid = gen_grid(size)
-		*nextgrid.index(mid_point()) = Filled
-	} else {
+	grid = gen_grid(size)
+	*grid.index(mid_point()) = Filled
 
-		heart_radius := 30.0
-		grid = gen_heart_grid(size, heart_radius)
-	}
-
-	// walkers := make([]Walker, 1)
-	// walkers[0] = Walker{
-	// 	location: middle,
-	// 	ttl:      tau,
-	// }
+	nextgrid = gen_grid(size)
+	*nextgrid.index(mid_point()) = Filled
 
 	model := Model{
 		grid:     grid,
 		nextGrid: nextgrid,
+		players:  []Player{},
 		// walkers:  []TreeWalker{{location: vectorFromPoint(mid_point()), intensity: 100}},
-		walkers: []TreeWalker{},
-		grids:   make([]Grid, 0, 100),
-		size:    size,
-		spawn:   Vector{50, 50},
-		time:    0,
+		size: size,
+		time: 0,
 	}
 
 	return model
@@ -638,13 +592,16 @@ func weightedDirection(weight Vector) []float64 {
 
 }
 
-func (m *Model) treeTick(r *rand.Rand) bool {
+func (m *Model) treeTick(turn int, r *rand.Rand) bool {
 
-	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), m.spawn)
+	player := m.players[turn]
+
+	// mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), player.spawn)
+	liveMouseVector := vectorFromPoint(LIVE_MOUSE_POINT)
 
 	alive := false
 
-	for i, walker := range m.walkers {
+	for i, walker := range player.walkers {
 		if walker.intensity < 1 {
 			continue
 		}
@@ -655,9 +612,11 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		var new_point Point
 
 		velo := walker.velocity
-		force := mouseTarget
+
+		var force Vector
+		// force := mouseTarget
 		if LIVE_FORCE_ATTRACT {
-			force = subtract(force, m.spawn)
+			force = subtract(liveMouseVector, walker.location)
 			// change this if u want it to be like it was before
 			// force = curvyForce(subtract(walker.location, m.spawn), mouseTarget)
 			// force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
@@ -690,10 +649,10 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		// new_vec = add_vectors(walker.location, UNITS[selection])
 
 		velo.normalize()
-		m.walkers[i].location.add(velo)
-		m.walkers[i].velocity = velo
+		player.walkers[i].location.add(velo)
+		player.walkers[i].velocity = velo
 
-		quantized := m.walkers[i].location.roundToPoint()
+		quantized := player.walkers[i].location.roundToPoint()
 
 		// *m.nextGrid.index(quantized) += 1
 		// i think this is the next thing to work on
@@ -703,23 +662,23 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		girdValue := *m.nextGrid.index(quantized)
 		if girdValue == 0 {
 			*m.nextGrid.index(quantized) += 1
-			m.walkers[i].intensity -= 1
+			player.walkers[i].intensity -= 1
 
 		}
 
 		// conditions to reset walkers
-		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
+		// if m.onPerimeter(quantized) || distance(player.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
 		if m.onPerimeter(quantized) ||
-			distance(m.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
-			// m.walkers = slices.Delete(m.walkers, i, i+1)
-			m.walkers[i].intensity = 0
+			distance(player.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
+			// player.walkers = slices.Delete(m.walkers, i, i+1)
+			player.walkers[i].intensity = 0
 			continue
 			// return true
 		}
 
 		// dont split if we dont have any food / intensity ig
 		// if r.Float64() < SPLIT && walker.intensity >= 2 {
-		// 	og := m.walkers[i]
+		// 	og := player.walkers[i]
 		// 	newVelo := og.velocity
 		//
 		// 	if rand.Float64() < 0.5 {
@@ -730,8 +689,8 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		//
 		// 	newVelo.scale(2)
 		//
-		// 	m.walkers = append(
-		// 		m.walkers,
+		// 	player.walkers = append(
+		// 		player.walkers,
 		// 		TreeWalker{
 		// 			location:  add_vectors(og.location, newVelo),
 		// 			intensity: og.intensity / 2,
@@ -739,7 +698,7 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 		// 		},
 		// 	)
 		//
-		// 	m.walkers[i].intensity /= 2
+		// 	player.walkers[i].intensity /= 2
 		// }
 
 		// if *m.grid.index(walker) == Empty {
@@ -937,9 +896,17 @@ func newLiveGame(p float64, distance int) *LiveGame {
 
 	initGlobals()
 
+	model := init_model(GRID_SIZE)
+	theMap := defaultMap()
+
+	model.players = make([]Player, 2)
+
+	model.players[0] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn1)}
+	model.players[1] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn2)}
+
 	return &LiveGame{
-		model:    init_model(GRID_SIZE, p, distance),
-		theMap:   defaultMap(),
+		model:    model,
+		theMap:   theMap,
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		p:        p,
 		distance: distance,
@@ -949,12 +916,12 @@ func newLiveGame(p float64, distance int) *LiveGame {
 }
 
 func (g *LiveGame) reset() {
-	g.model = init_model(GRID_SIZE, g.p, g.distance)
+	g.model = init_model(GRID_SIZE)
 }
 
 func (g *LiveGame) step() bool {
 	g.model.nextGrid = gen_grid(g.model.size)
-	end := g.model.treeTick(g.rng)
+	end := g.model.treeTick(g.currentTurn(), g.rng)
 
 	for i := range g.model.size {
 		for j := range g.model.size {
@@ -972,7 +939,7 @@ func (g *LiveGame) toggleTurn() {
 }
 
 func (g *LiveGame) currentTurn() int {
-	return g.Turn + 1
+	return g.Turn
 }
 
 func mouseWeightVector(cursorX, cursorY, width, height int) Vector {
@@ -1014,7 +981,7 @@ func (g *LiveGame) Update() error {
 
 	if !g.Moving {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-			g.model.spawnWalker()
+			g.model.spawnWalker(g.currentTurn())
 			g.Moving = true
 		}
 	}
@@ -1073,7 +1040,8 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	// const arabicText = "لمّا كان الاعتراف بالكرامة المتأصلة في جميع"
 
 	// const someText = "hello there"
-	var someText = fmt.Sprintf("Player %d Turn", g.currentTurn())
+	// classic +1 for fake silly human index
+	var someText = fmt.Sprintf("Player %d Turn", g.currentTurn()+1)
 	// f := &text.GoTextFace{
 	// 	Source:    arabicFaceSource,
 	// 	Direction: text.DirectionRightToLeft,
