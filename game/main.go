@@ -3,10 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"image"
 
 	// "golang.org/x/text/language"
 	_ "embed"
-	"image"
 	"image/color"
 	_ "image/png"
 	"log/slog"
@@ -97,7 +97,7 @@ var fontFace text.Face = text.NewGoXFace(basicfont.Face7x13)
 
 // var arabicFaceSource *text.GoTextFaceSource
 
-type Grid [][]SiteState
+type Grid [][]Trail
 
 // these field r now exported to get json-ed
 type Point struct {
@@ -331,6 +331,11 @@ type Player struct {
 	spawn   Vector
 }
 
+type Trail struct {
+	playerNum int
+	value     int
+}
+
 type Model struct {
 	grid     Grid
 	nextGrid Grid
@@ -344,13 +349,16 @@ type Model struct {
 func (m *Model) spawnWalker(playerIndex int) {
 	// middle := mid_point()
 
+	// *ahem* this will surely be a problem later
+	playerIndex -= 1
+
 	player := &m.players[playerIndex]
 	player.walkers = append(
 		player.walkers,
 		TreeWalker{location: player.spawn, intensity: 100},
 	)
 
-	fmt.Println(len(m.players[playerIndex].walkers))
+	// fmt.Println(len(m.players[playerIndex].walkers))
 }
 
 func (m *Model) clear() {
@@ -378,7 +386,7 @@ func gen_grid(size int) Grid {
 	grid := make(Grid, size)
 
 	for row := range grid {
-		grid[row] = make([]SiteState, size)
+		grid[row] = make([]Trail, size)
 	}
 
 	return grid
@@ -393,11 +401,11 @@ func round(x float64) int {
 	return int(math.Round(x))
 }
 
-func (g Grid) raw_index(point Point) *SiteState {
+func (g Grid) raw_index(point Point) *Trail {
 	return &g[point.Y][point.X]
 }
 
-func (g Grid) index(point Point) *SiteState {
+func (g Grid) index(point Point) *Trail {
 	// radius := len(g) / 2
 	// point.X = max(-radius, min(radius, point.X))
 	// point.Y = max(-radius, min(radius, point.Y))
@@ -415,7 +423,7 @@ func (v *Vector) roundToPoint() Point {
 	return Point{X: round(v.x), Y: round(v.y)}
 }
 
-func (g Grid) vectorIndex(vector Vector) *SiteState {
+func (g Grid) vectorIndex(vector Vector) *Trail {
 
 	copied := vector
 	return g.index(copied.roundToPoint())
@@ -464,10 +472,10 @@ func init_model(size int) Model {
 	var nextgrid Grid
 
 	grid = gen_grid(size)
-	*grid.index(mid_point()) = Filled
+	// *grid.index(mid_point()) = Filled
 
 	nextgrid = gen_grid(size)
-	*nextgrid.index(mid_point()) = Filled
+	// *nextgrid.index(mid_point()) = Filled
 
 	model := Model{
 		grid:     grid,
@@ -486,18 +494,6 @@ func (m *Model) origin() Point {
 	return Point{X: 0, Y: 0}
 }
 
-func (m *Model) countNeibors(point Point) int {
-	neighbors := 0
-	for _, step := range CARDINALS {
-		new_point := add_points(point, step)
-		if m.grid.is_valid_point(new_point) && *m.grid.index(new_point) > 0 {
-			neighbors++
-		}
-	}
-
-	return neighbors
-}
-
 func (m *Model) onPerimeter(point Point) bool {
 
 	// radius := (m.size-1)/2 - 1
@@ -513,38 +509,6 @@ func (m *Model) onPerimeter(point Point) bool {
 		return false
 	}
 
-}
-
-func (m *Model) countOnRadius(radius int) int {
-	count := 0
-
-	if radius == 0 {
-		return 1
-	}
-
-	for i := range radius*2 + 1 {
-		i -= radius
-
-		if *m.grid.index(Point{X: i, Y: -radius}) > 0 {
-			count++
-		}
-		if *m.grid.index(Point{X: i, Y: radius}) > 0 {
-			count++
-		}
-	}
-	// dont wanna double count the corners
-	for i := range radius*2 - 1 {
-		i -= radius
-
-		if *m.grid.index(Point{X: -radius, Y: i}) > 0 {
-			count++
-		}
-		if *m.grid.index(Point{X: radius, Y: i}) > 0 {
-			count++
-		}
-	}
-
-	return count
 }
 
 func dotProduct(v1, v2 Vector) float64 {
@@ -594,7 +558,7 @@ func weightedDirection(weight Vector) []float64 {
 
 func (m *Model) treeTick(turn int, r *rand.Rand) bool {
 
-	player := m.players[turn]
+	player := m.players[turn-1]
 
 	// mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), player.spawn)
 	liveMouseVector := vectorFromPoint(LIVE_MOUSE_POINT)
@@ -608,9 +572,9 @@ func (m *Model) treeTick(turn int, r *rand.Rand) bool {
 
 		alive = true
 
-		var new_vec Vector
-		var new_point Point
-
+		// var new_vec Vector
+		// var new_point Point
+		//
 		velo := walker.velocity
 
 		var force Vector
@@ -625,26 +589,40 @@ func (m *Model) treeTick(turn int, r *rand.Rand) bool {
 		velo.add(force)
 		// velo.add(WEIGHT_VECTOR)
 
-		totalTrail := 0.0
+		force = ZERO_VECTOR
 		for _, bird := range UNITS {
-			totalTrail += float64(*m.grid.vectorIndex(add_vectors(walker.location, bird)))
-		}
 
-		if totalTrail > 0 {
-			for i := range UNITS {
+			trail := *m.grid.vectorIndex(add_vectors(walker.location, bird))
 
-				new_vec = add_vectors(walker.location, UNITS[i])
+			if trail.playerNum == turn {
 
-				new_point = new_vec.roundToPoint()
+				bird.scale(float64(trail.value))
+				force.add(bird)
 
-				if *m.grid.index(new_point) > 0 {
-					direction := UNITS[i]
-					direction.scale(float64(*m.grid.index(new_point)) / totalTrail)
-					velo.add(direction)
-					// probs[i] *= SACRIFICE
-				}
 			}
 		}
+
+		force.normalize()
+		// totalTrail := 0.0
+		// for _, bird := range UNITS {
+		// 	totalTrail += float64(*m.grid.vectorIndex(add_vectors(walker.location, bird)))
+		// }
+		//
+		// if totalTrail > 0 {
+		// 	for i := range UNITS {
+		//
+		// 		new_vec = add_vectors(walker.location, UNITS[i])
+		//
+		// 		new_point = new_vec.roundToPoint()
+		//
+		// 		if *m.grid.index(new_point) > 0 {
+		// 			direction := UNITS[i]
+		// 			direction.scale(float64(*m.grid.index(new_point)) / totalTrail)
+		// 			velo.add(direction)
+		// 			// probs[i] *= SACRIFICE
+		// 		}
+		// 	}
+		// }
 
 		// new_vec = add_vectors(walker.location, UNITS[selection])
 
@@ -660,11 +638,13 @@ func (m *Model) treeTick(turn int, r *rand.Rand) bool {
 		//
 
 		girdValue := *m.nextGrid.index(quantized)
-		if girdValue == 0 {
-			*m.nextGrid.index(quantized) += 1
-			player.walkers[i].intensity -= 1
-
+		if girdValue.playerNum == turn {
+			m.nextGrid.index(quantized).value += 1
+		} else {
+			*m.nextGrid.index(quantized) = Trail{playerNum: turn, value: 1}
 		}
+
+		player.walkers[i].intensity -= 1
 
 		// conditions to reset walkers
 		// if m.onPerimeter(quantized) || distance(player.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
@@ -910,7 +890,7 @@ func newLiveGame(p float64, distance int) *LiveGame {
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		p:        p,
 		distance: distance,
-		Turn:     0,
+		Turn:     1,
 		Moving:   false,
 	}
 }
@@ -925,9 +905,21 @@ func (g *LiveGame) step() bool {
 
 	for i := range g.model.size {
 		for j := range g.model.size {
-			g.model.grid[i][j] += g.model.nextGrid[i][j]
+			old := g.model.grid[i][j]
+			next := g.model.nextGrid[i][j]
+
+			if old.playerNum == next.playerNum {
+				g.model.grid[i][j].value += g.model.nextGrid[i][j].value
+			} else if old.playerNum == 0 {
+				g.model.grid[i][j] = next
+			}
+			// if next.playerNum != 0 {
+			// 	fmt.Println(i, j)
+			// 	fmt.Println(g.model.grid[i][j])
+			// }
 		}
 	}
+	fmt.Println()
 
 	g.model.time++
 
@@ -935,7 +927,7 @@ func (g *LiveGame) step() bool {
 }
 
 func (g *LiveGame) toggleTurn() {
-	g.Turn = g.Turn ^ 1
+	g.Turn = g.Turn ^ 3
 }
 
 func (g *LiveGame) currentTurn() int {
@@ -1041,7 +1033,7 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 
 	// const someText = "hello there"
 	// classic +1 for fake silly human index
-	var someText = fmt.Sprintf("Player %d Turn", g.currentTurn()+1)
+	var someText = fmt.Sprintf("Player %d Turn", g.currentTurn())
 	// f := &text.GoTextFace{
 	// 	Source:    arabicFaceSource,
 	// 	Direction: text.DirectionRightToLeft,
@@ -1144,6 +1136,8 @@ func main() {
 
 }
 
+// func
+
 func calc_color(percent float64) color.NRGBA {
 	RStart, REnd := 1.0, 255.0
 
@@ -1155,20 +1149,22 @@ func calc_color(percent float64) color.NRGBA {
 	}
 }
 
-func copyGrid2Image(grid Grid, image *ebiten.Image) {
+func copyGrid2Image(grid Grid, screen *ebiten.Image) {
 
 	scale := int(SCALE)
 
 	largest := 0.0
 	for _, row := range grid {
 		for _, value := range row {
-			if float64(value) > largest {
-				largest = float64(value)
+			if value.playerNum > 0 {
+				if float64(value.value) > largest {
+					largest = float64(value.value)
+				}
 			}
 		}
 	}
 
-	*grid.index(mid_point()) = Origin
+	// *grid.index(mid_point()) = Trail{playerNum: -1, value: int(Origin)}
 
 	// cropped := model.size - model.distance*2
 
@@ -1177,24 +1173,40 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 	for y, row := range grid {
 		for x, value := range row {
 
-			var color color.Color
-			if value < 0 {
-				color = StateColor[value]
-			} else if value > 0 {
-				color = calc_color(float64(value) / largest)
+			// var color color.Color = calc_color(float64(value.value) / largest)
+
+			var colour color.Color
+			if value.playerNum < 0 {
+				colour = StateColor[SiteState(value.value)]
+			} else if value.value > 0 {
+
+				if value.playerNum == 1 {
+					colour = color.NRGBA{R: uint8(float64(value.value) / largest * 255), A: 255}
+				} else {
+
+					colour = color.NRGBA{G: uint8(float64(value.value) / largest * 255), A: 255}
+				}
+				// color = calc_color(float64(value.value) / largest)
 			} else {
 				continue
 			}
+			// if value.playerNum <= 0 {
+			// 	color = StateColor[SiteState(value.value)]
+			// } else {
+			// 	color = calc_color(float64(value.value) / largest)
+			// }
 
-			// image.WritePixels()
+			// subImage := screen.(image.Rect(x, y, x + scale, y + scale))
+			// subImage.
 			for i := range scale {
 				for j := range scale {
-					image.Set(x*scale+j, y*scale+i, color)
+					screen.Set(x*scale+j, y*scale+i, colour)
+					// image.SubImage()
+					// image.Fill()
 				}
 			}
 		}
 	}
-
 }
 
 func grid2png(grid Grid) *image.NRGBA {
@@ -1207,13 +1219,15 @@ func grid2png(grid Grid) *image.NRGBA {
 	largest := 0.0
 	for _, row := range grid {
 		for _, value := range row {
-			if float64(value) > largest {
-				largest = float64(value)
+			if value.playerNum >= 0 {
+				if float64(value.value) > largest {
+					largest = float64(value.value)
+				}
 			}
 		}
 	}
 
-	*grid.index(mid_point()) = Origin
+	*grid.index(mid_point()) = Trail{playerNum: -1, value: int(Origin)}
 
 	// cropped := model.size - model.distance*2
 
@@ -1225,10 +1239,10 @@ func grid2png(grid Grid) *image.NRGBA {
 		for x, value := range row {
 
 			var color color.Color
-			if value <= 0 {
-				color = StateColor[value]
+			if value.playerNum <= 0 {
+				color = StateColor[SiteState(value.value)]
 			} else {
-				color = calc_color(float64(value) / largest)
+				color = calc_color(float64(value.value) / largest)
 			}
 
 			for i := range scale {
