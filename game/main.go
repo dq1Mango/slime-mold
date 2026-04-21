@@ -3,6 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+
+	// "golang.org/x/text/language"
+	_ "embed"
 	"image"
 	"image/color"
 	_ "image/png"
@@ -16,7 +19,10 @@ import (
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
+	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/montanaflynn/stats"
+	// "golang.org/x/image/font"
+	"golang.org/x/image/font/basicfont"
 	// "slices"
 )
 
@@ -82,6 +88,13 @@ var StateColor = map[SiteState]color.NRGBA{
 		A: 255,
 	},
 }
+
+// ffdsf go:embed NotoSans-Regular.ttf
+// var arabicTTF []byte
+
+var fontFace text.Face = text.NewGoXFace(basicfont.Face7x13)
+
+// var arabicFaceSource *text.GoTextFaceSource
 
 type Grid [][]SiteState
 
@@ -958,6 +971,13 @@ func renderProgressBar(series stats.Series) {
 // maybe they should be or maybe this should have a different name
 func initGlobals() {
 
+	// s, err := text.NewGoTextFaceSource(bytes.NewReader(notoSansTFF))
+	// if err != nil {
+	// 	slog.Error(err)
+	// 	panic(err)
+	// }
+	// arabicFaceSource = s
+
 	// data, err := os.ReadFile("../assests/oat.png")
 	//
 	// if err != nil {
@@ -1083,6 +1103,44 @@ func (g *LiveGame) Update() error {
 	// return errors.New("bruh")
 }
 
+func centeredTextOpts(theText string, scale float64, x, y float64) *text.DrawOptions {
+	w, h := text.Measure(
+		theText,
+		fontFace,
+		0,
+	) // The left upper point is not x but x-w, since the text runs in the rigth-to-left direction.
+	// fmt.Println(w, h)
+
+	x, y = x-scale*w/2, y-scale*h/2
+	fmt.Println(x, y)
+	// x, y = 50, 50
+	// vector.FillRect(screen, float32(x)-float32(w), float32(y), float32(w), float32(h), gray, false)
+	op := &text.DrawOptions{}
+	op.ColorScale.ScaleWithColor(color.White)
+	op.GeoM.Scale(scale, scale)
+	op.GeoM.Translate(float64(x), float64(y))
+	return op
+
+}
+
+func (g *LiveGame) DrawStats(screen *ebiten.Image) {
+	// const arabicText = "لمّا كان الاعتراف بالكرامة المتأصلة في جميع"
+	const someText = "hello there"
+	// f := &text.GoTextFace{
+	// 	Source:    arabicFaceSource,
+	// 	Direction: text.DirectionRightToLeft,
+	// 	Size:      24,
+	// 	Language:  language.Arabic,
+	// }
+
+	// textScale := 5.0
+
+	op := centeredTextOpts(someText, 2, SCREEN_SIZE/2, 50)
+
+	text.Draw(screen, someText, fontFace, op)
+
+}
+
 func (g *LiveGame) Draw(screen *ebiten.Image) {
 
 	ebitenutil.DebugPrint(screen, "Click to spawn\nC to clear")
@@ -1118,6 +1176,8 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 	}
 
 	copyGrid2Image(g.model.grid, screen)
+
+	g.DrawStats(screen)
 	// screen.WritePixels(frame.Pix)
 }
 
