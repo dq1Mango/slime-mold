@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"math"
 	"math/rand"
-	"slices"
 	"strings"
 	"time"
 
@@ -21,11 +20,13 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/montanaflynn/stats"
+
 	// "golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	// "slices"
 )
 
+// constants
 const END_RATIO = 0.01
 const GRID_SIZE = 200
 
@@ -641,10 +642,14 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 
 	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), m.spawn)
 
+	alive := false
+
 	for i, walker := range m.walkers {
 		if walker.intensity < 1 {
 			continue
 		}
+
+		alive = true
 
 		var new_vec Vector
 		var new_point Point
@@ -749,89 +754,10 @@ func (m *Model) treeTick(r *rand.Rand) bool {
 
 	}
 
-	return false
+	return !alive
+	// return false
 
 	// panic("shouldnt reach this")
-}
-
-func (m *Model) run_trial(r *rand.Rand) Data {
-	model := m
-
-	for m.time < int(1000) {
-
-		model.nextGrid = gen_grid(m.size)
-		// fmt.Println(m.time)
-		// end := model.tick(r)
-		end := model.treeTick(r)
-
-		for i := range m.size {
-			for j := range m.size {
-				model.grid[i][j] += model.nextGrid[i][j]
-			}
-		}
-
-		copied := make(Grid, m.size)
-		for i := range copied {
-			copied[i] = slices.Clone(m.grid[i])
-		}
-		// *copied.index(new_point) = Active
-
-		m.grids = append(m.grids, copied)
-
-		m.time++
-		// end := model.different_tick(r)
-
-		// fmt.Println("ticked me off")
-
-		if end {
-			break
-		}
-	}
-
-	data := make(Data, 0, model.radius)
-	// running_total := 1
-	//
-	// for r := 1; r < model.radius; r++ {
-	// 	running_total += model.countOnRadius(r)
-	// 	data = append(data, DataPoint{radius: r, filled: running_total})
-	// }
-	return data
-
-}
-
-func run_simulation() stats.Series {
-	distance := 20
-	num_points := 100.0
-
-	r := rand.New(rand.NewSource(time.Now().UnixNano()))
-
-	series := make(stats.Series, 0, int(num_points))
-
-	for p := 0.01; p < 1.0; p += 0.01 {
-		// p := p / num_points
-
-		clear_line()
-		fmt.Print("this much done: ", p*100, "%")
-
-		model := init_model(GRID_SIZE, p, distance)
-
-		data := model.run_trial(r)
-		casted := data.toSeries()
-		logged := logLog(casted)
-
-		_, gradient, err := LinearRegression(logged)
-
-		if err != nil {
-			panic(err)
-		}
-
-		series = append(series, stats.Coordinate{X: p, Y: gradient})
-
-	}
-
-	// pretty_picture(model, "testing", 5)
-	return series
-
 }
 
 type DataPoint struct {
@@ -1003,6 +929,8 @@ type LiveGame struct {
 	rng      *rand.Rand
 	p        float64
 	distance int
+	Turn     int
+	Moving   bool
 }
 
 func newLiveGame(p float64, distance int) *LiveGame {
@@ -1015,6 +943,8 @@ func newLiveGame(p float64, distance int) *LiveGame {
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		p:        p,
 		distance: distance,
+		Turn:     0,
+		Moving:   false,
 	}
 }
 
@@ -1035,6 +965,14 @@ func (g *LiveGame) step() bool {
 	g.model.time++
 
 	return end || g.model.time >= 1000
+}
+
+func (g *LiveGame) toggleTurn() {
+	g.Turn = g.Turn ^ 1
+}
+
+func (g *LiveGame) currentTurn() int {
+	return g.Turn + 1
 }
 
 func mouseWeightVector(cursorX, cursorY, width, height int) Vector {
@@ -1074,8 +1012,15 @@ func (g *LiveGame) Update() error {
 		g.model.clear()
 	}
 
-	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-		g.model.spawnWalker()
+	if !g.Moving {
+		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			g.model.spawnWalker()
+			g.Moving = true
+		}
+	}
+
+	if !g.Moving {
+		return nil
 	}
 
 	w, h := ebiten.WindowSize()
@@ -1094,6 +1039,8 @@ func (g *LiveGame) Update() error {
 	// Take multiple simulation steps per frame to keep visible growth speed.
 	for range 1 {
 		if g.step() {
+			g.Moving = false
+			g.toggleTurn()
 			// g.reset()
 			break
 		}
@@ -1109,10 +1056,9 @@ func centeredTextOpts(theText string, scale float64, x, y float64) *text.DrawOpt
 		fontFace,
 		0,
 	) // The left upper point is not x but x-w, since the text runs in the rigth-to-left direction.
-	// fmt.Println(w, h)
 
 	x, y = x-scale*w/2, y-scale*h/2
-	fmt.Println(x, y)
+	// fmt.Println(x, y)
 	// x, y = 50, 50
 	// vector.FillRect(screen, float32(x)-float32(w), float32(y), float32(w), float32(h), gray, false)
 	op := &text.DrawOptions{}
@@ -1125,7 +1071,9 @@ func centeredTextOpts(theText string, scale float64, x, y float64) *text.DrawOpt
 
 func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	// const arabicText = "لمّا كان الاعتراف بالكرامة المتأصلة في جميع"
-	const someText = "hello there"
+
+	// const someText = "hello there"
+	var someText = fmt.Sprintf("Player %d Turn", g.currentTurn())
 	// f := &text.GoTextFace{
 	// 	Source:    arabicFaceSource,
 	// 	Direction: text.DirectionRightToLeft,
@@ -1135,7 +1083,7 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 
 	// textScale := 5.0
 
-	op := centeredTextOpts(someText, 2, SCREEN_SIZE/2, 50)
+	op := centeredTextOpts(someText, 3, SCREEN_SIZE/2, 50)
 
 	text.Draw(screen, someText, fontFace, op)
 
@@ -1144,7 +1092,6 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 func (g *LiveGame) Draw(screen *ebiten.Image) {
 
 	ebitenutil.DebugPrint(screen, "Click to spawn\nC to clear")
-	// fmt.Println(screen)
 
 	// opts := &ebiten.DrawImageOptions{}
 	// opts.GeoM.Scale(0.1, 0.1)
@@ -1159,7 +1106,6 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 		size *= oatScale
 
 		opts := &ebiten.DrawImageOptions{}
-		// fmt.Println("ycoord; ", float64(food.Position.X*SCREEN_SIZE)/SIZE)
 		opts.GeoM.Scale(oatScale, oatScale)
 
 		opts.GeoM.Translate(
