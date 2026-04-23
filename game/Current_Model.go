@@ -1,3 +1,5 @@
+//go:build current_model
+
 package main
 
 import (
