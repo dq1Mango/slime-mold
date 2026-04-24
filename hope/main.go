@@ -1,5 +1,3 @@
-//ignore go:build current_model
-
 package main
 
 import (
@@ -14,7 +12,7 @@ import (
 	"log/slog"
 	"math"
 	"math/rand"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -23,7 +21,6 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/montanaflynn/stats"
-
 	// "golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	// "slices"
@@ -234,7 +231,7 @@ func attractionForce(from, to Vector) Vector {
 	return force
 }
 
-const MAX_DISTANCE = 1000
+const MAX_DISTANCE = 100
 
 var ZERO_VECTOR = Vector{x: 0, y: 0}
 
@@ -295,6 +292,80 @@ func curvyForce(relativePos, weight Vector) Vector {
 	return output
 }
 
+func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
+	center := from.roundToPoint()
+	radius := FORCE_CAMP_RADIUS
+
+	yMin := max(0, center.Y-radius)
+	yMax := min(m.size-1, center.Y+radius)
+	xMin := max(0, center.X-radius)
+	xMax := min(m.size-1, center.X+radius)
+
+	totalWeight := 0.0
+	summedDirection := Vector{x: 0, y: 0}
+	bestWeight := 0.0
+	bestTarget := Point{}
+	foundTarget := false
+
+	for y := yMin; y <= yMax; y++ {
+		for x := xMin; x <= xMax; x++ {
+			trailStrength := m.grid[y][x]
+			if trailStrength <= Empty {
+				continue
+			}
+			owner := m.rootGrid[y][x]
+			if owner == ROOT_NONE || owner == rootID {
+				continue
+			}
+
+			ownershipFactor := 1.0
+			if owner == ROOT_MIXED {
+				ownershipFactor = FORCE_CAMP_MIXED_ROOT_WEIGHT
+			}
+
+			dx := float64(x - center.X)
+			dy := float64(y - center.Y)
+			dist := math.Sqrt(dx*dx + dy*dy)
+			if dist == 0 || dist > float64(radius) {
+				continue
+			}
+
+			radialWeight := (float64(radius) - dist) / float64(radius)
+			if radialWeight <= 0 {
+				continue
+			}
+
+			weight := float64(trailStrength) * radialWeight * ownershipFactor
+			direction := Vector{x: dx, y: dy}
+			direction.normalize()
+			direction.scale(weight)
+			summedDirection.add(direction)
+			totalWeight += weight
+
+			if !foundTarget || weight > bestWeight {
+				bestWeight = weight
+				bestTarget = Point{X: x, Y: y}
+				foundTarget = true
+			}
+		}
+	}
+
+	if totalWeight == 0 || summedDirection.magnitude() == 0 || !foundTarget {
+		return ZERO_VECTOR, false
+	}
+
+	commitment := summedDirection.magnitude() / totalWeight
+	if commitment < FORCE_CAMP_MIN_COMMIT {
+		return ZERO_VECTOR, false
+	}
+
+	campForce := Vector{x: float64(bestTarget.X - center.X), y: float64(bestTarget.Y - center.Y)}
+	campForce.normalize()
+	campForce.scale(FORCE_CAMP_PULL * FORCE_CAMP_COMMIT_FRACTION)
+
+	return campForce, true
+}
+
 func mid_point() Point {
 	mid := (GRID_SIZE - 1) / 2
 
@@ -343,28 +414,15 @@ type TreeWalker struct {
 	location  Vector
 	intensity float64
 	velocity  Vector
-	rootID    int
-}
-
-type Player struct {
-	walkers []TreeWalker
-	spawn   Vector
 }
 
 type Model struct {
 	grid     Grid
 	nextGrid Grid
-	rootGrid [][]int
-	nextRoot [][]int
-
-	players []Player
-	turn    int
-
-	grids           []Grid
-	size            int
-	nextRootID      int
-	particlesInGrid int
-	freeParticles   int
+	walkers  []TreeWalker
+	grids    []Grid
+	size     int
+	spawn    Vector
 	// p        float64
 	// people   int
 	// infected int
@@ -375,574 +433,13 @@ type Model struct {
 
 func (m *Model) spawnWalker() {
 	middle := mid_point()
-	player := m.currentPlayer()
-	rootID := m.allocateRootID()
-	player.walkers = append(
-		player.walkers,
-		TreeWalker{location: vectorFromPoint(middle), intensity: 100, rootID: rootID},
-	)
-}
-
-// This spawns walkers on all existing trail points near target (usually the mouse).
-// The selected region is the closest radial distance plus a small outward buffer.
-func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point) bool {
-	if len(m.grid) == 0 {
-		return false
-	}
-
-	closestDistSq := 0
-	found := false
-
-	type candidate struct {
-		point  Point
-		distSq int
-	}
-
-	candidates := make([]candidate, 0, m.size*m.size)
-
-	for y := range m.size {
-		for x := range m.size {
-			if m.grid[y][x] <= Empty {
-				continue
-			}
-
-			dx := x - target.X
-			dy := y - target.Y
-			distSq := dx*dx + dy*dy
-			candidates = append(candidates, candidate{point: Point{X: x, Y: y}, distSq: distSq})
-
-			if !found || distSq < closestDistSq {
-				closestDistSq = distSq
-				found = true
-			}
-		}
-	}
-
-	if !found {
-		return false
-	}
-
-	const blendWindow = 8.0
-	const maxSelectedPoints = 5
-	minDist := math.Sqrt(float64(closestDistSq))
-
-	type nearbyCandidate struct {
-		point Point
-		dist  float64
-	}
-
-	selected := make([]nearbyCandidate, 0, len(candidates))
-
-	for _, c := range candidates {
-		dist := math.Sqrt(float64(c.distSq))
-		if dist <= minDist+blendWindow {
-			selected = append(selected, nearbyCandidate{point: c.point, dist: dist})
-		}
-	}
-
-	if len(selected) == 0 {
-		return false
-	}
-
-	sort.Slice(selected, func(i, j int) bool {
-		return selected[i].dist < selected[j].dist
-	})
-
-	if len(selected) > maxSelectedPoints {
-		selected = selected[:maxSelectedPoints]
-	}
-
-	const spawnResourceBudget = 100.0
-	rootID := m.allocateRootID()
-	totalWeight := 0.0
-	weights := make([]float64, len(selected))
-	for i, c := range selected {
-		weight := 1.0 / (c.dist + 1.0)
-		weights[i] = weight
-		totalWeight += weight
-	}
-
-	player := m.currentPlayer()
-
-	for i, c := range selected {
-		intensity := spawnResourceBudget * (weights[i] / totalWeight)
-		player.walkers = append(
-			player.walkers,
-			TreeWalker{location: vectorFromPoint(c.point), intensity: intensity, rootID: rootID},
-		)
-	}
-
-	return true
+	m.walkers = append(m.walkers, TreeWalker{location: vectorFromPoint(middle), intensity: 100})
 }
 
 func (m *Model) clear() {
 	m.grid = gen_grid(m.size)
-	m.nextGrid = gen_grid(m.size)
-	m.rootGrid = genIntGrid(m.size, ROOT_NONE)
-	m.nextRoot = genIntGrid(m.size, ROOT_NONE)
-	m.nextRootID = 0
-	m.particlesInGrid = 0
-	m.freeParticles = TOTAL_PARTICLE_RESOURCES
-
-	for i := range m.players {
-		m.players[i].walkers = []TreeWalker{}
-
-	}
-}
-
-func (m *Model) allocateRootID() int {
-	rootID := m.nextRootID
-	m.nextRootID++
-	return rootID
-}
-
-func (m *Model) currentPlayer() *Player {
-	return &m.players[m.turn]
-}
-
-func (m *Model) cullWeakWalkers() {
-
-	player := m.currentPlayer()
-
-	alive := player.walkers[:0]
-	for _, walker := range player.walkers {
-		if walker.intensity >= MIN_WALKER_INTENSITY {
-			alive = append(alive, walker)
-		}
-	}
-	player.walkers = alive
-}
-
-func directionStep(v Vector) Point {
-	if math.Abs(v.x) >= math.Abs(v.y) {
-		if v.x > 0 {
-			return Point{X: 1, Y: 0}
-		}
-		if v.x < 0 {
-			return Point{X: -1, Y: 0}
-		}
-	}
-
-	if v.y > 0 {
-		return Point{X: 0, Y: 1}
-	}
-	if v.y < 0 {
-		return Point{X: 0, Y: -1}
-	}
-
-	return Point{X: 0, Y: 0}
-}
-
-func (m *Model) isOccupied(p Point) bool {
-	if p.X < 0 || p.X >= m.size || p.Y < 0 || p.Y >= m.size {
-		return false
-	}
-
-	return m.grid[p.Y][p.X] > 0
-}
-
-func (m *Model) isEdgeParticleCell(p Point) bool {
-	if !m.isOccupied(p) {
-		return false
-	}
-
-	for _, d := range CARDINALS {
-		n := add_points(p, d)
-		if !m.isOccupied(n) {
-			return true
-		}
-	}
-
-	return false
-}
-
-func (m *Model) canRemoveCellSafely(p Point) bool {
-	if !m.isOccupied(p) {
-		return false
-	}
-
-	totalCells := m.size * m.size
-	remaining := 0
-	start := Point{X: -1, Y: -1}
-	for y := range m.size {
-		for x := range m.size {
-			if x == p.X && y == p.Y {
-				continue
-			}
-			if m.grid[y][x] <= 0 {
-				continue
-			}
-			remaining++
-			if start.X == -1 {
-				start = Point{X: x, Y: y}
-			}
-		}
-	}
-
-	if remaining <= 1 {
-		return true
-	}
-
-	queue := []Point{start}
-	visited := make([]bool, totalCells)
-	visited[start.Y*m.size+start.X] = true
-	visitedCount := 1
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, d := range CARDINALS {
-			n := add_points(cur, d)
-			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
-				continue
-			}
-			if n.X == p.X && n.Y == p.Y {
-				continue
-			}
-			idx := n.Y*m.size + n.X
-			if m.grid[n.Y][n.X] <= 0 || visited[idx] {
-				continue
-			}
-			visited[idx] = true
-			visitedCount++
-			queue = append(queue, n)
-		}
-	}
-
-	return visitedCount == remaining
-}
-
-func (m *Model) dissolveDetachedFromAnchor(anchor Point) {
-	start := Point{X: -1, Y: -1}
-	bestDistSq := math.MaxInt
-
-	for y := range m.size {
-		for x := range m.size {
-			if m.grid[y][x] <= 0 {
-				continue
-			}
-			dx := x - anchor.X
-			dy := y - anchor.Y
-			distSq := dx*dx + dy*dy
-			if distSq < bestDistSq {
-				bestDistSq = distSq
-				start = Point{X: x, Y: y}
-			}
-		}
-	}
-
-	if start.X == -1 {
-		return
-	}
-
-	queue := []Point{start}
-	visited := map[Point]bool{start: true}
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, d := range CARDINALS {
-			n := add_points(cur, d)
-			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
-				continue
-			}
-			if m.grid[n.Y][n.X] <= 0 || visited[n] {
-				continue
-			}
-			visited[n] = true
-			queue = append(queue, n)
-		}
-	}
-
-	for y := range m.size {
-		for x := range m.size {
-			p := Point{X: x, Y: y}
-			if m.grid[y][x] <= 0 || visited[p] {
-				continue
-			}
-			removed := int(m.grid[y][x])
-			m.particlesInGrid -= removed
-			m.freeParticles += removed
-			m.grid[y][x] = 0
-			m.rootGrid[y][x] = ROOT_NONE
-		}
-	}
-}
-
-func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
-	start := Point{X: -1, Y: -1}
-	bestDistSq := math.MaxInt
-
-	for y := range m.size {
-		for x := range m.size {
-			if (x == cut.X && y == cut.Y) || m.grid[y][x] <= 0 {
-				continue
-			}
-			dx := x - anchor.X
-			dy := y - anchor.Y
-			distSq := dx*dx + dy*dy
-			if distSq < bestDistSq {
-				bestDistSq = distSq
-				start = Point{X: x, Y: y}
-			}
-		}
-	}
-
-	if start.X == -1 {
-		return false
-	}
-
-	queue := []Point{start}
-	connected := map[Point]bool{start: true}
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, d := range CARDINALS {
-			n := add_points(cur, d)
-			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
-				continue
-			}
-			if (n.X == cut.X && n.Y == cut.Y) || m.grid[n.Y][n.X] <= 0 || connected[n] {
-				continue
-			}
-			connected[n] = true
-			queue = append(queue, n)
-		}
-	}
-
-	detachedFound := false
-	detachedBest := Point{}
-	detachedBestWeight := -1.0
-
-	for y := range m.size {
-		for x := range m.size {
-			p := Point{X: x, Y: y}
-			if (x == cut.X && y == cut.Y) || m.grid[y][x] <= 0 || connected[p] {
-				continue
-			}
-			detachedFound = true
-
-			level := m.grid[y][x]
-			weight := 1.0 / float64(level)
-			if level >= HIGH_FLOW_THRESHOLD {
-				weight *= 0.35
-			}
-			if weight > detachedBestWeight {
-				detachedBestWeight = weight
-				detachedBest = p
-			}
-		}
-	}
-
-	if !detachedFound {
-		return false
-	}
-
-	m.grid[detachedBest.Y][detachedBest.X] -= 1
-	if m.grid[detachedBest.Y][detachedBest.X] <= 0 {
-		m.rootGrid[detachedBest.Y][detachedBest.X] = ROOT_NONE
-	}
-	m.particlesInGrid--
-	m.freeParticles++
-	return true
-}
-
-func (m *Model) refillFreeParticles(anchor Point) bool {
-	if m.freeParticles > 0 {
-		return true
-	}
-
-	for range RESOURCE_REFILL_BATCH {
-		if !m.reclaimOneParticle(anchor) {
-			break
-		}
-		if m.freeParticles > 0 {
-			return true
-		}
-	}
-
-	return m.freeParticles > 0
-}
-
-func (m *Model) regenerateResourceCap() {
-	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
-	if m.freeParticles >= maxFree {
-		return
-	}
-
-	m.freeParticles = min(maxFree, m.freeParticles+RESOURCE_CAP_REGEN_PER_TICK)
-}
-
-func (m *Model) applyResourcePressure(anchor Point) bool {
-	utilization := float64(m.particlesInGrid) / float64(TOTAL_PARTICLE_RESOURCES)
-	if utilization <= RESOURCE_PRESSURE_THRESHOLD {
-		return true
-	}
-
-	// Past threshold, reclaim more than we add so dense states thin out gradually.
-	pressure := (utilization - RESOURCE_PRESSURE_THRESHOLD) / (1.0 - RESOURCE_PRESSURE_THRESHOLD)
-	reclaims := 1 + int(pressure)
-
-	for range reclaims {
-		if !m.reclaimOneParticle(anchor) {
-			return false
-		}
-	}
-
-	return true
-}
-
-func (m *Model) reclaimOneParticle(anchor Point) bool {
-	_ = anchor
-	totalCells := m.size * m.size
-
-	bestFallback := Point{}
-	bestWeight := -1.0
-	foundFallback := false
-	connectivityChecks := 0
-
-	for range RECLAIM_SAMPLE_TRIES {
-		idx := rand.Intn(totalCells)
-		y := idx / m.size
-		x := idx % m.size
-
-		candidate := Point{X: x, Y: y}
-		level := m.grid[y][x]
-		if level <= 0 || !m.isEdgeParticleCell(candidate) {
-			continue
-		}
-		if level == 1 {
-			if connectivityChecks >= RECLAIM_MAX_CONNECTIVITY_CHECKS {
-				continue
-			}
-			connectivityChecks++
-			if !m.canRemoveCellSafely(candidate) {
-				continue
-			}
-		}
-
-		weight := 1.0 / float64(level)
-		if level >= HIGH_FLOW_THRESHOLD {
-			weight *= 0.35
-		}
-
-		if !foundFallback || weight > bestWeight {
-			bestWeight = weight
-			bestFallback = candidate
-			foundFallback = true
-		}
-
-		if rand.Float64() < weight {
-			m.grid[candidate.Y][candidate.X] -= 1
-			if m.grid[candidate.Y][candidate.X] <= 0 {
-				m.rootGrid[candidate.Y][candidate.X] = ROOT_NONE
-			}
-			m.particlesInGrid--
-			m.freeParticles++
-			return true
-		}
-	}
-
-	if !foundFallback {
-		start := rand.Intn(totalCells)
-		for offset := range totalCells {
-			idx := (start + offset) % totalCells
-			y := idx / m.size
-			x := idx % m.size
-
-			candidate := Point{X: x, Y: y}
-			level := m.grid[y][x]
-			if level <= 0 || !m.isEdgeParticleCell(candidate) {
-				continue
-			}
-			if level == 1 {
-				if connectivityChecks >= RECLAIM_MAX_CONNECTIVITY_CHECKS {
-					continue
-				}
-				connectivityChecks++
-				if !m.canRemoveCellSafely(candidate) {
-					continue
-				}
-			}
-
-			weight := 1.0 / float64(level)
-			if level >= HIGH_FLOW_THRESHOLD {
-				weight *= 0.35
-			}
-			if !foundFallback || weight > bestWeight {
-				bestWeight = weight
-				bestFallback = candidate
-				foundFallback = true
-			}
-		}
-	}
-
-	if foundFallback {
-		m.grid[bestFallback.Y][bestFallback.X] -= 1
-		if m.grid[bestFallback.Y][bestFallback.X] <= 0 {
-			m.rootGrid[bestFallback.Y][bestFallback.X] = ROOT_NONE
-		}
-		m.particlesInGrid--
-		m.freeParticles++
-		return true
-	}
-
-	return false
-}
-
-func (m *Model) addParticleAt(p Point, rootID int) bool {
-	if p.X < 0 || p.X >= m.size || p.Y < 0 || p.Y >= m.size {
-		return false
-	}
-	if m.grid[p.Y][p.X] >= MAX_CELL_PARTICLES {
-		return false
-	}
-
-	if !m.applyResourcePressure(p) {
-		return false
-	}
-
-	if !m.refillFreeParticles(p) {
-		if !m.reclaimOneParticle(p) {
-			return false
-		}
-	}
-
-	m.grid[p.Y][p.X] += 1
-	m.particlesInGrid++
-	m.freeParticles--
-
-	existingOwner := m.rootGrid[p.Y][p.X]
-	if existingOwner == ROOT_NONE {
-		m.rootGrid[p.Y][p.X] = rootID
-	} else if existingOwner != rootID {
-		m.rootGrid[p.Y][p.X] = ROOT_MIXED
-	}
-
-	return true
-}
-
-func (m *Model) depositWithOverflow(target Point, travel Vector, rootID int) bool {
-	spot := target
-	step := directionStep(travel)
-
-	for range 4 {
-		if m.addParticleAt(spot, rootID) {
-			return true
-		}
-
-		if step.X == 0 && step.Y == 0 {
-			break
-		}
-
-		spot = add_points(spot, step)
-		if spot.X < 0 || spot.X >= m.size || spot.Y < 0 || spot.Y >= m.size {
-			break
-		}
-	}
-
-	return false
+	// m.nextGrid = gen_grid(m.size)
+	m.walkers = []TreeWalker{}
 }
 
 // func remove[T any](slice []T, s int) []T {
@@ -959,18 +456,6 @@ func gen_grid(size int) Grid {
 
 	for row := range grid {
 		grid[row] = make([]SiteState, size)
-	}
-
-	return grid
-}
-
-func genIntGrid(size int, fill int) [][]int {
-	grid := make([][]int, size)
-	for y := range size {
-		grid[y] = make([]int, size)
-		for x := range size {
-			grid[y][x] = fill
-		}
 	}
 
 	return grid
@@ -1084,22 +569,33 @@ func random_step(r *rand.Rand) Point {
 
 }
 
-func init_model(size int) Model {
+func init_model(size int, _ float64, distance int) Model {
 
 	// if size%2 == 0 {
 	// 	panic("grid size must be odd you doofus")
 	// }
 
+	if distance <= 0 {
+		panic("spawning distacne must be non-negative")
+	}
+
 	// grid_type := "normal"
 	// grid_type := "heart"
+	heart := false
 
 	var grid Grid
 	var nextgrid Grid
-	grid = gen_grid(size)
-	// *grid.index(mid_point()) = Filled
+	if !heart {
+		grid = gen_grid(size)
+		*grid.index(mid_point()) = Filled
 
-	nextgrid = gen_grid(size)
-	// *nextgrid.index(mid_point()) = Filled
+		nextgrid = gen_grid(size)
+		*nextgrid.index(mid_point()) = Filled
+	} else {
+
+		heart_radius := 30.0
+		grid = gen_heart_grid(size, heart_radius)
+	}
 
 	// walkers := make([]Walker, 1)
 	// walkers[0] = Walker{
@@ -1110,30 +606,13 @@ func init_model(size int) Model {
 	model := Model{
 		grid:     grid,
 		nextGrid: nextgrid,
-		rootGrid: genIntGrid(size, ROOT_NONE),
-		nextRoot: genIntGrid(size, ROOT_NONE),
 		// walkers:  []TreeWalker{{location: vectorFromPoint(mid_point()), intensity: 100}},
-
-		players: []Player{},
-		turn:    0,
-
-		grids:           make([]Grid, 0, 100),
-		size:            size,
-		time:            0,
-		nextRootID:      0,
-		particlesInGrid: 0,
-		freeParticles:   TOTAL_PARTICLE_RESOURCES,
+		walkers: []TreeWalker{},
+		grids:   make([]Grid, 0, 100),
+		size:    size,
+		spawn:   Vector{50, 50},
+		time:    0,
 	}
-
-	for y := range size {
-		for x := range size {
-			if model.grid[y][x] > 0 {
-				model.particlesInGrid += int(model.grid[y][x])
-				model.rootGrid[y][x] = ROOT_MIXED
-			}
-		}
-	}
-	model.freeParticles = max(0, TOTAL_PARTICLE_RESOURCES-model.particlesInGrid)
 
 	return model
 
@@ -1249,94 +728,14 @@ func weightedDirection(weight Vector) []float64 {
 
 }
 
-func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
-	center := from.roundToPoint()
-	radius := FORCE_CAMP_RADIUS
+func (m *Model) treeTick(r *rand.Rand) bool {
 
-	yMin := max(0, center.Y-radius)
-	yMax := min(m.size-1, center.Y+radius)
-	xMin := max(0, center.X-radius)
-	xMax := min(m.size-1, center.X+radius)
+	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), m.spawn)
 
-	totalWeight := 0.0
-	summedDirection := Vector{x: 0, y: 0}
-	bestWeight := 0.0
-	bestTarget := Point{}
-	foundTarget := false
-
-	for y := yMin; y <= yMax; y++ {
-		for x := xMin; x <= xMax; x++ {
-			trailStrength := m.grid[y][x]
-			if trailStrength <= Empty {
-				continue
-			}
-			owner := m.rootGrid[y][x]
-			if owner == ROOT_NONE || owner == rootID {
-				continue
-			}
-
-			ownershipFactor := 1.0
-			if owner == ROOT_MIXED {
-				ownershipFactor = FORCE_CAMP_MIXED_ROOT_WEIGHT
-			}
-
-			dx := float64(x - center.X)
-			dy := float64(y - center.Y)
-			dist := math.Sqrt(dx*dx + dy*dy)
-			if dist == 0 || dist > float64(radius) {
-				continue
-			}
-
-			radialWeight := (float64(radius) - dist) / float64(radius)
-			if radialWeight <= 0 {
-				continue
-			}
-
-			weight := float64(trailStrength) * radialWeight * ownershipFactor
-			direction := Vector{x: dx, y: dy}
-			direction.normalize()
-			direction.scale(weight)
-			summedDirection.add(direction)
-			totalWeight += weight
-
-			if !foundTarget || weight > bestWeight {
-				bestWeight = weight
-				bestTarget = Point{X: x, Y: y}
-				foundTarget = true
-			}
-		}
-	}
-
-	if totalWeight == 0 || summedDirection.magnitude() == 0 || !foundTarget {
-		return ZERO_VECTOR, false
-	}
-
-	commitment := summedDirection.magnitude() / totalWeight
-	if commitment < FORCE_CAMP_MIN_COMMIT {
-		return ZERO_VECTOR, false
-	}
-
-	campForce := Vector{x: float64(bestTarget.X - center.X), y: float64(bestTarget.Y - center.Y)}
-	campForce.normalize()
-	campForce.scale(FORCE_CAMP_PULL * FORCE_CAMP_COMMIT_FRACTION)
-
-	return campForce, true
-}
-
-func (m *Model) johnTick(r *rand.Rand) bool {
-	player := m.currentPlayer()
-
-	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), player.spawn)
-
-	alive := false
-
-	for i, walker := range player.walkers {
-		if walker.intensity < MIN_WALKER_INTENSITY {
-			player.walkers[i].intensity = 0
+	for i, walker := range m.walkers {
+		if walker.intensity < 1 {
 			continue
 		}
-
-		alive = true
 
 		var new_vec Vector
 		var new_point Point
@@ -1344,7 +743,125 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		velo := walker.velocity
 		force := mouseTarget
 		if LIVE_FORCE_ATTRACT {
-			force = subtract(vectorFromPoint(LIVE_MOUSE_POINT), player.spawn)
+			force = subtract(force, m.spawn)
+			// change this if u want it to be like it was before
+			// force = curvyForce(subtract(walker.location, m.spawn), mouseTarget)
+			// force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
+		}
+		force.normalize()
+		velo.add(force)
+		// velo.add(WEIGHT_VECTOR)
+
+		totalTrail := 0.0
+		for _, bird := range UNITS {
+			totalTrail += float64(*m.grid.vectorIndex(add_vectors(walker.location, bird)))
+		}
+
+		if totalTrail > 0 {
+			for i := range UNITS {
+
+				new_vec = add_vectors(walker.location, UNITS[i])
+
+				new_point = new_vec.roundToPoint()
+
+				if *m.grid.index(new_point) > 0 {
+					direction := UNITS[i]
+					direction.scale(float64(*m.grid.index(new_point)) / totalTrail)
+					velo.add(direction)
+					// probs[i] *= SACRIFICE
+				}
+			}
+		}
+
+		// new_vec = add_vectors(walker.location, UNITS[selection])
+
+		velo.normalize()
+		m.walkers[i].location.add(velo)
+		m.walkers[i].velocity = velo
+
+		quantized := m.walkers[i].location.roundToPoint()
+
+		// *m.nextGrid.index(quantized) += 1
+		// i think this is the next thing to work on
+		// we need to find some model the walkers loosing intensity as they walk
+		//
+
+		girdValue := *m.nextGrid.index(quantized)
+		if girdValue == 0 {
+			*m.nextGrid.index(quantized) += 1
+			m.walkers[i].intensity -= 1
+
+		}
+
+		// conditions to reset walkers
+		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
+		if m.onPerimeter(quantized) ||
+			distance(m.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
+			// m.walkers = slices.Delete(m.walkers, i, i+1)
+			m.walkers[i].intensity = 0
+			continue
+			// return true
+		}
+
+		// dont split if we dont have any food / intensity ig
+		// if r.Float64() < SPLIT && walker.intensity >= 2 {
+		// 	og := m.walkers[i]
+		// 	newVelo := og.velocity
+		//
+		// 	if rand.Float64() < 0.5 {
+		// 		newVelo.rotate(math.Pi / 2)
+		// 	} else {
+		// 		newVelo.rotate(-math.Pi / 2)
+		// 	}
+		//
+		// 	newVelo.scale(2)
+		//
+		// 	m.walkers = append(
+		// 		m.walkers,
+		// 		TreeWalker{
+		// 			location:  add_vectors(og.location, newVelo),
+		// 			intensity: og.intensity / 2,
+		// 			velocity:  newVelo,
+		// 		},
+		// 	)
+		//
+		// 	m.walkers[i].intensity /= 2
+		// }
+
+		// if *m.grid.index(walker) == Empty {
+		// 	*m.grid.index(walker) = Filled
+
+		// if m.onPerimeter(new_point) {
+		// 	return true
+		// } else {
+		// 	return false
+		// }
+		// }
+
+	}
+
+	return false
+
+	// panic("shouldnt reach this")
+}
+
+func (m *Model) johnTick(r *rand.Rand) bool {
+
+	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), m.spawn)
+
+	for i, walker := range m.walkers {
+		if walker.intensity < MIN_WALKER_INTENSITY {
+			m.walkers[i].intensity = 0
+			continue
+		}
+
+		var new_vec Vector
+		var new_point Point
+
+		velo := walker.velocity
+		force := mouseTarget
+		if LIVE_FORCE_ATTRACT {
+			force = subtract(force, m.spawn)
 			// change this if u want it to be like it was before
 			// force = curvyForce(subtract(walker.location, m.spawn), mouseTarget)
 			// force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
@@ -1382,10 +899,10 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		// new_vec = add_vectors(walker.location, UNITS[selection])
 
 		velo.normalize()
-		player.walkers[i].location.add(velo)
-		player.walkers[i].velocity = velo
+		m.walkers[i].location.add(velo)
+		m.walkers[i].velocity = velo
 
-		quantized := player.walkers[i].location.roundToPoint()
+		quantized := m.walkers[i].location.roundToPoint()
 
 		// *m.nextGrid.index(quantized) += 1
 		// i think this is the next thing to work on
@@ -1393,22 +910,22 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		//
 
 		if m.depositWithOverflow(quantized, velo, walker.rootID) {
-			player.walkers[i].intensity -= 1
+			m.walkers[i].intensity -= 1
 		}
 
 		// conditions to reset walkers
 		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
 		if m.onPerimeter(quantized) ||
-			distance(player.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
+			distance(m.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
 			// m.walkers = slices.Delete(m.walkers, i, i+1)
-			player.walkers[i].intensity = 0
+			m.walkers[i].intensity = 0
 			continue
 			// return true
 		}
 
 		// dont split if we dont have any food / intensity ig
 		if r.Float64() < SPLIT && walker.intensity >= 2 {
-			og := player.walkers[i]
+			og := m.walkers[i]
 			newVelo := og.velocity
 
 			if rand.Float64() < 0.5 {
@@ -1419,8 +936,8 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 			newVelo.scale(2)
 
-			player.walkers = append(
-				player.walkers,
+			m.walkers = append(
+				m.walkers,
 				TreeWalker{
 					location:  add_vectors(og.location, newVelo),
 					intensity: og.intensity / 2,
@@ -1429,7 +946,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 				},
 			)
 
-			player.walkers[i].intensity /= 2
+			m.walkers[i].intensity /= 2
 		}
 
 		// if *m.grid.index(walker) == Empty {
@@ -1446,9 +963,89 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 	m.cullWeakWalkers()
 
-	return !alive
+	return false
 
 	// panic("shouldnt reach this")
+}
+
+func (m *Model) run_trial(r *rand.Rand) Data {
+	model := m
+
+	for m.time < int(1000) {
+
+		model.nextGrid = gen_grid(m.size)
+		// fmt.Println(m.time)
+		// end := model.tick(r)
+		end := model.treeTick(r)
+
+		for i := range m.size {
+			for j := range m.size {
+				model.grid[i][j] += model.nextGrid[i][j]
+			}
+		}
+
+		copied := make(Grid, m.size)
+		for i := range copied {
+			copied[i] = slices.Clone(m.grid[i])
+		}
+		// *copied.index(new_point) = Active
+
+		m.grids = append(m.grids, copied)
+
+		m.time++
+		// end := model.different_tick(r)
+
+		// fmt.Println("ticked me off")
+
+		if end {
+			break
+		}
+	}
+
+	data := make(Data, 0, model.radius)
+	// running_total := 1
+	//
+	// for r := 1; r < model.radius; r++ {
+	// 	running_total += model.countOnRadius(r)
+	// 	data = append(data, DataPoint{radius: r, filled: running_total})
+	// }
+	return data
+
+}
+
+func run_simulation() stats.Series {
+	distance := 20
+	num_points := 100.0
+
+	r := rand.New(rand.NewSource(time.Now().UnixNano()))
+
+	series := make(stats.Series, 0, int(num_points))
+
+	for p := 0.01; p < 1.0; p += 0.01 {
+		// p := p / num_points
+
+		clear_line()
+		fmt.Print("this much done: ", p*100, "%")
+
+		model := init_model(GRID_SIZE, p, distance)
+
+		data := model.run_trial(r)
+		casted := data.toSeries()
+		logged := logLog(casted)
+
+		_, gradient, err := LinearRegression(logged)
+
+		if err != nil {
+			panic(err)
+		}
+
+		series = append(series, stats.Coordinate{X: p, Y: gradient})
+
+	}
+
+	// pretty_picture(model, "testing", 5)
+	return series
+
 }
 
 type DataPoint struct {
@@ -1620,71 +1217,32 @@ type LiveGame struct {
 	rng      *rand.Rand
 	p        float64
 	distance int
-
-	Turn   int
-	Moving bool
 }
 
 func newLiveGame(p float64, distance int) *LiveGame {
 
 	initGlobals()
 
-	theMap := defaultMap()
-
-	model := init_model(GRID_SIZE)
-	model.players = make([]Player, 2)
-
-	model.players[0] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn1)}
-	model.players[1] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn2)}
-
-	for _, player := range model.players {
-		*model.grid.vectorIndex(player.spawn) = Filled
-	}
-
 	return &LiveGame{
-		model:    model,
-		theMap:   theMap,
+		model:    init_model(GRID_SIZE, p, distance),
+		theMap:   defaultMap(),
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		p:        p,
 		distance: distance,
-		Turn:     1,
-		Moving:   false,
 	}
 }
 
 func (g *LiveGame) reset() {
-	g.model = init_model(GRID_SIZE)
-}
-
-func (g *LiveGame) toggleTurn() {
-	g.Turn = g.Turn ^ 3
-	g.model.turn = g.Turn - 1
-}
-
-func (g *LiveGame) currentTurn() int {
-	return g.Turn
+	g.model = init_model(GRID_SIZE, g.p, g.distance)
 }
 
 func (g *LiveGame) step() bool {
-	g.model.regenerateResourceCap()
 	g.model.nextGrid = gen_grid(g.model.size)
-	g.model.nextRoot = genIntGrid(g.model.size, ROOT_NONE)
-	end := g.model.johnTick(g.rng)
+	end := g.model.treeTick(g.rng)
 
 	for i := range g.model.size {
 		for j := range g.model.size {
 			g.model.grid[i][j] += g.model.nextGrid[i][j]
-			incomingOwner := g.model.nextRoot[i][j]
-			if incomingOwner == ROOT_NONE {
-				continue
-			}
-
-			existingOwner := g.model.rootGrid[i][j]
-			if existingOwner == ROOT_NONE {
-				g.model.rootGrid[i][j] = incomingOwner
-			} else if existingOwner != incomingOwner {
-				g.model.rootGrid[i][j] = ROOT_MIXED
-			}
 		}
 	}
 
@@ -1708,6 +1266,17 @@ func mouseWeightVector(cursorX, cursorY, width, height int) Vector {
 	return v
 }
 
+func mouseTargetVector(cursorX, cursorY, width, height int) Vector {
+	if width <= 0 || height <= 0 {
+		return Vector{x: 0, y: 0}
+	}
+
+	x := (float64(cursorX)/float64(width) - 0.5) * float64(GRID_SIZE-1)
+	y := (0.5 - float64(cursorY)/float64(height)) * float64(GRID_SIZE-1)
+
+	return Vector{x: x, y: y}
+}
+
 func mouseTargetPoint(cursorX, cursorY, width, height int) Point {
 	return Point{X: cursorX * GRID_SIZE / width, Y: cursorY * GRID_SIZE / height}
 }
@@ -1715,32 +1284,21 @@ func mouseTargetPoint(cursorX, cursorY, width, height int) Point {
 // there should probably be a dedicated input handling function
 func (g *LiveGame) Update() error {
 
-	w, h := ebiten.WindowSize()
-	x, y := ebiten.CursorPosition()
-
-	LIVE_MOUSE_POINT = mouseTargetPoint(x, y, w, h)
-
 	if inpututil.IsKeyJustPressed(ebiten.KeyC) {
 		g.model.clear()
 	}
 
-	if !g.Moving {
-		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
-			if !g.model.spawnWalkerAtNearestPlacedParticle(LIVE_MOUSE_POINT) {
-				g.model.spawnWalker()
-			}
-			g.Moving = true
-			fmt.Println("started moving")
-		}
+	if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+		g.model.spawnWalker()
 	}
 
-	if !g.Moving {
-		return nil
-	}
+	w, h := ebiten.WindowSize()
+	x, y := ebiten.CursorPosition()
 
 	// fmt.Println(w, h, x, y)
 
 	// LIVE_MOUSE_TARGET = mouseTargetVector(x, y, w, h)
+	LIVE_MOUSE_POINT = mouseTargetPoint(x, y, w, h)
 	// fmt.Println(LIVE_MOUSE_POINT)
 	// WEIGHT_VECTOR = vectorFromPoint(LIVE_MOUSE_POINT)
 	//uhhh
@@ -1750,9 +1308,6 @@ func (g *LiveGame) Update() error {
 	// Take multiple simulation steps per frame to keep visible growth speed.
 	for range 1 {
 		if g.step() {
-			fmt.Println("stopped moving")
-			g.Moving = false
-			g.toggleTurn()
 			// g.reset()
 			break
 		}
@@ -1768,8 +1323,10 @@ func centeredTextOpts(theText string, scale float64, x, y float64) *text.DrawOpt
 		fontFace,
 		0,
 	) // The left upper point is not x but x-w, since the text runs in the rigth-to-left direction.
+	// fmt.Println(w, h)
 
 	x, y = x-scale*w/2, y-scale*h/2
+	fmt.Println(x, y)
 	// x, y = 50, 50
 	// vector.FillRect(screen, float32(x)-float32(w), float32(y), float32(w), float32(h), gray, false)
 	op := &text.DrawOptions{}
@@ -1782,10 +1339,7 @@ func centeredTextOpts(theText string, scale float64, x, y float64) *text.DrawOpt
 
 func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	// const arabicText = "لمّا كان الاعتراف بالكرامة المتأصلة في جميع"
-
-	// const someText = "hello there"
-	// classic +1 for fake silly human index
-	var someText = fmt.Sprintf("Player %d Turn", g.currentTurn())
+	const someText = "hello there"
 	// f := &text.GoTextFace{
 	// 	Source:    arabicFaceSource,
 	// 	Direction: text.DirectionRightToLeft,
@@ -1795,7 +1349,7 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 
 	// textScale := 5.0
 
-	op := centeredTextOpts(someText, 3, SCREEN_SIZE/2, 50)
+	op := centeredTextOpts(someText, 2, SCREEN_SIZE/2, 50)
 
 	text.Draw(screen, someText, fontFace, op)
 
@@ -1804,6 +1358,7 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 func (g *LiveGame) Draw(screen *ebiten.Image) {
 
 	ebitenutil.DebugPrint(screen, "Click to spawn\nC to clear")
+	// fmt.Println(screen)
 
 	// opts := &ebiten.DrawImageOptions{}
 	// opts.GeoM.Scale(0.1, 0.1)
@@ -1900,33 +1455,18 @@ func calc_color(percent float64) color.NRGBA {
 	}
 }
 
-const FLOW_LEVELS = 10
-
-var FLOW_PALETTE = [FLOW_LEVELS]color.NRGBA{
-	{R: 30, G: 42, B: 56, A: 255},
-	{R: 54, G: 92, B: 141, A: 255},
-	{R: 57, G: 123, B: 152, A: 255},
-	{R: 71, G: 152, B: 110, A: 255},
-	{R: 126, G: 177, B: 68, A: 255},
-	{R: 184, G: 188, B: 72, A: 255},
-	{R: 217, G: 163, B: 62, A: 255},
-	{R: 229, G: 117, B: 53, A: 255},
-	{R: 216, G: 68, B: 58, A: 255},
-	{R: 181, G: 36, B: 48, A: 255},
-}
-
-func quantizeFlowBucket(value float64, levels int) int {
-	if levels <= 1 || value <= 0 {
-		return 0
-	}
-
-	bucket := int(math.Round(value)) - 1
-	return max(0, min(levels-1, bucket))
-}
-
 func copyGrid2Image(grid Grid, image *ebiten.Image) {
 
 	scale := int(SCALE)
+
+	largest := 0.0
+	for _, row := range grid {
+		for _, value := range row {
+			if float64(value) > largest {
+				largest = float64(value)
+			}
+		}
+	}
 
 	*grid.index(mid_point()) = Origin
 
@@ -1941,8 +1481,7 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 			if value < 0 {
 				color = StateColor[value]
 			} else if value > 0 {
-				flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
-				color = FLOW_PALETTE[flowBucket]
+				color = calc_color(float64(value) / largest)
 			} else {
 				continue
 			}
@@ -1965,6 +1504,15 @@ func grid2png(grid Grid) *image.NRGBA {
 
 	scale := screen_size / size
 
+	largest := 0.0
+	for _, row := range grid {
+		for _, value := range row {
+			if float64(value) > largest {
+				largest = float64(value)
+			}
+		}
+	}
+
 	*grid.index(mid_point()) = Origin
 
 	// cropped := model.size - model.distance*2
@@ -1980,8 +1528,7 @@ func grid2png(grid Grid) *image.NRGBA {
 			if value <= 0 {
 				color = StateColor[value]
 			} else {
-				flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
-				color = FLOW_PALETTE[flowBucket]
+				color = calc_color(float64(value) / largest)
 			}
 
 			for i := range scale {
