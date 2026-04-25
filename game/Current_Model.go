@@ -693,7 +693,7 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 
 	for y := range m.size {
 		for x := range m.size {
-			if (x == cut.X && y == cut.Y) || m.grid[y][x].isEmpty() {
+			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 {
 				continue
 			}
 			dx := x - anchor.X
@@ -721,7 +721,9 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
 				continue
 			}
-			if (n.X == cut.X && n.Y == cut.Y) || m.grid[n.Y][n.X].isEmpty() || connected[n] {
+			if (n.X == cut.X && n.Y == cut.Y) ||
+				m.grid[n.Y][n.X].playerNum != m.turn+1 ||
+				connected[n] {
 				continue
 			}
 			connected[n] = true
@@ -736,7 +738,7 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 	for y := range m.size {
 		for x := range m.size {
 			p := Point{X: x, Y: y}
-			if (x == cut.X && y == cut.Y) || m.grid[y][x].isEmpty() || connected[p] {
+			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 || connected[p] {
 				continue
 			}
 			detachedFound = true
@@ -949,6 +951,7 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 	return true
 }
 
+// not using this right now, it didnt seem that important
 func (m *Model) depositWithOverflow(target Point, travel Vector, rootID int) bool {
 	spot := target
 	step := directionStep(travel)
@@ -1354,7 +1357,22 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		// we need to find some model the walkers loosing intensity as they walk
 		//
 
-		if m.depositWithOverflow(quantized, velo, walker.rootID) {
+		trail := m.grid.index(quantized)
+		if !trail.isEmpty() && trail.playerNum != m.turn+1 {
+			fmt.Println("detected adversary")
+			// hah get it?
+			INTensity := int(walker.intensity)
+			if trail.value > INTensity {
+				trail.value -= INTensity
+				walker.intensity = 0
+
+			} else if trail.value < INTensity {
+				*trail = Trail{playerNum: m.turn + 1, value: 1}
+			} else {
+
+				*trail = EmptyTrail
+			}
+		} else if m.depositWithOverflow(quantized, velo, walker.rootID) {
 			player.walkers[i].intensity -= 1
 		}
 
@@ -1903,6 +1921,35 @@ func quantizeFlowBucket(value float64, levels int) int {
 	return max(0, min(levels-1, bucket))
 }
 
+// Gradient defines a linear gradient between two colors.
+type Gradient struct {
+	Start, End color.NRGBA
+}
+
+// At returns the interpolated color at position t in [0, 1].
+func (g Gradient) At(t float64) color.NRGBA {
+	t = math.Max(0, math.Min(1, t))
+	lerp := func(a, b uint8) uint8 {
+		return uint8(math.Round(float64(a) + (float64(b)-float64(a))*t))
+	}
+	return color.NRGBA{
+		R: lerp(g.Start.R, g.End.R),
+		G: lerp(g.Start.G, g.End.G),
+		B: lerp(g.Start.B, g.End.B),
+		A: lerp(g.Start.A, g.End.A),
+	}
+}
+
+var RedGradient = Gradient{
+	Start: color.NRGBA{R: 100, A: 255},
+	End:   color.NRGBA{R: 255, A: 255},
+}
+
+var BlueGradient = Gradient{
+	Start: color.NRGBA{R: 15, B: 100, G: 40, A: 255},
+	End:   color.NRGBA{R: 40, B: 255, G: 135, A: 255},
+}
+
 func copyGrid2Image(grid Grid, image *ebiten.Image) {
 
 	scale := int(SCALE)
@@ -1922,17 +1969,19 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 
 			value := SiteState(trail.value)
 
-			var color color.Color
+			var colour color.Color
 			if value < 0 {
-				color = StateColor[value]
+				colour = StateColor[value]
 			} else if value > 0 {
-				flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
+				// flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
 
 				if trail.playerNum == 1 {
-					color = FLOW_PALETTE[flowBucket]
+					// color = FLOW_PALETTE[flowBucket]
+					colour = RedGradient.At(float64(value) / 10)
 
 				} else if trail.playerNum == 2 {
-					color = OPPOSITE_FLOW_PALETTE[flowBucket]
+					// colour = OPPOSITE_FLOW_PALETTE[flowBucket]
+					colour = BlueGradient.At(float64(value) / 10)
 				} else {
 					println("uknown playnernum: ", trail.playerNum)
 				}
@@ -1943,7 +1992,7 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 			// image.WritePixels()
 			for i := range scale {
 				for j := range scale {
-					image.Set(x*scale+j, y*scale+i, color)
+					image.Set(x*scale+j, y*scale+i, colour)
 				}
 			}
 		}
