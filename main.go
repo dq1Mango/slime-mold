@@ -603,6 +603,7 @@ func (m *Model) treeTick(turn int, r *rand.Rand) bool {
 		}
 
 		force.normalize()
+		velo.add(force)
 		// totalTrail := 0.0
 		// for _, bird := range UNITS {
 		// 	totalTrail += float64(*m.grid.vectorIndex(add_vectors(walker.location, bird)))

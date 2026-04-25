@@ -8,7 +8,6 @@ import (
 
 	// "golang.org/x/text/language"
 	_ "embed"
-	"image"
 	"image/color"
 	_ "image/png"
 	"log/slog"
@@ -116,7 +115,7 @@ var fontFace text.Face = text.NewGoXFace(basicfont.Face7x13)
 
 // var arabicFaceSource *text.GoTextFaceSource
 
-type Grid [][]SiteState
+type Grid [][]Trail
 
 // these field r now exported to get json-ed
 type Point struct {
@@ -232,6 +231,19 @@ func attractionForce(from, to Vector) Vector {
 
 	force.normalize()
 	return force
+}
+
+var EmptyTrail = Trail{
+	playerNum: 0, value: 0,
+}
+
+type Trail struct {
+	playerNum int
+	value     int
+}
+
+func (t *Trail) isEmpty() bool {
+	return t.playerNum <= 0
 }
 
 const MAX_DISTANCE = 1000
@@ -402,7 +414,13 @@ func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point) bool {
 
 	for y := range m.size {
 		for x := range m.size {
-			if m.grid[y][x] <= Empty {
+			if m.grid[y][x].isEmpty() {
+				continue
+			}
+
+			// fmt.Println(*m.grid.indexCoords(x, y))
+
+			if m.grid.indexCoords(x, y).playerNum != m.turn+1 {
 				continue
 			}
 
@@ -538,7 +556,7 @@ func (m *Model) isOccupied(p Point) bool {
 		return false
 	}
 
-	return m.grid[p.Y][p.X] > 0
+	return !m.grid[p.Y][p.X].isEmpty()
 }
 
 func (m *Model) isEdgeParticleCell(p Point) bool {
@@ -569,7 +587,7 @@ func (m *Model) canRemoveCellSafely(p Point) bool {
 			if x == p.X && y == p.Y {
 				continue
 			}
-			if m.grid[y][x] <= 0 {
+			if m.grid[y][x].isEmpty() {
 				continue
 			}
 			remaining++
@@ -600,7 +618,7 @@ func (m *Model) canRemoveCellSafely(p Point) bool {
 				continue
 			}
 			idx := n.Y*m.size + n.X
-			if m.grid[n.Y][n.X] <= 0 || visited[idx] {
+			if m.grid[n.Y][n.X].isEmpty() || visited[idx] {
 				continue
 			}
 			visited[idx] = true
@@ -618,7 +636,7 @@ func (m *Model) dissolveDetachedFromAnchor(anchor Point) {
 
 	for y := range m.size {
 		for x := range m.size {
-			if m.grid[y][x] <= 0 {
+			if m.grid[y][x].isEmpty() {
 				continue
 			}
 			dx := x - anchor.X
@@ -646,7 +664,7 @@ func (m *Model) dissolveDetachedFromAnchor(anchor Point) {
 			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
 				continue
 			}
-			if m.grid[n.Y][n.X] <= 0 || visited[n] {
+			if m.grid[n.Y][n.X].isEmpty() || visited[n] {
 				continue
 			}
 			visited[n] = true
@@ -657,13 +675,13 @@ func (m *Model) dissolveDetachedFromAnchor(anchor Point) {
 	for y := range m.size {
 		for x := range m.size {
 			p := Point{X: x, Y: y}
-			if m.grid[y][x] <= 0 || visited[p] {
+			if m.grid[y][x].isEmpty() || visited[p] {
 				continue
 			}
-			removed := int(m.grid[y][x])
+			removed := int(m.grid[y][x].value)
 			m.particlesInGrid -= removed
 			m.freeParticles += removed
-			m.grid[y][x] = 0
+			m.grid[y][x] = EmptyTrail
 			m.rootGrid[y][x] = ROOT_NONE
 		}
 	}
@@ -675,7 +693,7 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 
 	for y := range m.size {
 		for x := range m.size {
-			if (x == cut.X && y == cut.Y) || m.grid[y][x] <= 0 {
+			if (x == cut.X && y == cut.Y) || m.grid[y][x].isEmpty() {
 				continue
 			}
 			dx := x - anchor.X
@@ -703,7 +721,7 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
 				continue
 			}
-			if (n.X == cut.X && n.Y == cut.Y) || m.grid[n.Y][n.X] <= 0 || connected[n] {
+			if (n.X == cut.X && n.Y == cut.Y) || m.grid[n.Y][n.X].isEmpty() || connected[n] {
 				continue
 			}
 			connected[n] = true
@@ -718,12 +736,12 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 	for y := range m.size {
 		for x := range m.size {
 			p := Point{X: x, Y: y}
-			if (x == cut.X && y == cut.Y) || m.grid[y][x] <= 0 || connected[p] {
+			if (x == cut.X && y == cut.Y) || m.grid[y][x].isEmpty() || connected[p] {
 				continue
 			}
 			detachedFound = true
 
-			level := m.grid[y][x]
+			level := m.grid[y][x].value
 			weight := 1.0 / float64(level)
 			if level >= HIGH_FLOW_THRESHOLD {
 				weight *= 0.35
@@ -739,8 +757,9 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 		return false
 	}
 
-	m.grid[detachedBest.Y][detachedBest.X] -= 1
-	if m.grid[detachedBest.Y][detachedBest.X] <= 0 {
+	m.grid[detachedBest.Y][detachedBest.X].value -= 1
+	if m.grid[detachedBest.Y][detachedBest.X].value <= 0 {
+		m.grid[detachedBest.Y][detachedBest.X] = EmptyTrail
 		m.rootGrid[detachedBest.Y][detachedBest.X] = ROOT_NONE
 	}
 	m.particlesInGrid--
@@ -809,10 +828,10 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 
 		candidate := Point{X: x, Y: y}
 		level := m.grid[y][x]
-		if level <= 0 || !m.isEdgeParticleCell(candidate) {
+		if level.isEmpty() || !m.isEdgeParticleCell(candidate) {
 			continue
 		}
-		if level == 1 {
+		if level.value == 1 {
 			if connectivityChecks >= RECLAIM_MAX_CONNECTIVITY_CHECKS {
 				continue
 			}
@@ -822,8 +841,8 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 			}
 		}
 
-		weight := 1.0 / float64(level)
-		if level >= HIGH_FLOW_THRESHOLD {
+		weight := 1.0 / float64(level.value)
+		if level.value >= HIGH_FLOW_THRESHOLD {
 			weight *= 0.35
 		}
 
@@ -834,8 +853,9 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 		}
 
 		if rand.Float64() < weight {
-			m.grid[candidate.Y][candidate.X] -= 1
-			if m.grid[candidate.Y][candidate.X] <= 0 {
+			m.grid[candidate.Y][candidate.X].value -= 1
+			if m.grid[candidate.Y][candidate.X].value <= 0 {
+				m.grid[candidate.Y][candidate.X] = EmptyTrail
 				m.rootGrid[candidate.Y][candidate.X] = ROOT_NONE
 			}
 			m.particlesInGrid--
@@ -853,10 +873,10 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 
 			candidate := Point{X: x, Y: y}
 			level := m.grid[y][x]
-			if level <= 0 || !m.isEdgeParticleCell(candidate) {
+			if level.isEmpty() || !m.isEdgeParticleCell(candidate) {
 				continue
 			}
-			if level == 1 {
+			if level.value == 1 {
 				if connectivityChecks >= RECLAIM_MAX_CONNECTIVITY_CHECKS {
 					continue
 				}
@@ -866,8 +886,8 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 				}
 			}
 
-			weight := 1.0 / float64(level)
-			if level >= HIGH_FLOW_THRESHOLD {
+			weight := 1.0 / float64(level.value)
+			if level.value >= HIGH_FLOW_THRESHOLD {
 				weight *= 0.35
 			}
 			if !foundFallback || weight > bestWeight {
@@ -879,8 +899,9 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 	}
 
 	if foundFallback {
-		m.grid[bestFallback.Y][bestFallback.X] -= 1
-		if m.grid[bestFallback.Y][bestFallback.X] <= 0 {
+		m.grid[bestFallback.Y][bestFallback.X].value -= 1
+		if m.grid[bestFallback.Y][bestFallback.X].value <= 0 {
+			m.grid[bestFallback.Y][bestFallback.X] = EmptyTrail
 			m.rootGrid[bestFallback.Y][bestFallback.X] = ROOT_NONE
 		}
 		m.particlesInGrid--
@@ -892,10 +913,11 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 }
 
 func (m *Model) addParticleAt(p Point, rootID int) bool {
+
 	if p.X < 0 || p.X >= m.size || p.Y < 0 || p.Y >= m.size {
 		return false
 	}
-	if m.grid[p.Y][p.X] >= MAX_CELL_PARTICLES {
+	if !m.grid[p.Y][p.X].isEmpty() && m.grid[p.Y][p.X].value >= MAX_CELL_PARTICLES {
 		return false
 	}
 
@@ -909,7 +931,11 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 		}
 	}
 
-	m.grid[p.Y][p.X] += 1
+	if m.grid.index(p).isEmpty() {
+		*m.grid.index(p) = Trail{playerNum: m.turn + 1, value: 1}
+	} else {
+		m.grid.index(p).value += 1
+	}
 	m.particlesInGrid++
 	m.freeParticles--
 
@@ -958,7 +984,7 @@ func gen_grid(size int) Grid {
 	grid := make(Grid, size)
 
 	for row := range grid {
-		grid[row] = make([]SiteState, size)
+		grid[row] = make([]Trail, size)
 	}
 
 	return grid
@@ -995,35 +1021,11 @@ func heart_equation(t float64) (float64, float64) {
 	return x, y
 }
 
-func gen_heart_grid(size int, radius float64) Grid {
-
-	if int(radius) > size/2 {
-		panic(fmt.Errorf("ahhhhh: radius too large for grid size"))
-	}
-
-	grid := gen_grid(size)
-
-	points := 1000
-
-	for i := range points {
-		t := float64(i) / float64(points) * 2 * math.Pi
-
-		x, y := heart_equation(t)
-		point := Point{X: int(math.Round(x * radius)), Y: int(math.Round(y * radius))}
-
-		*grid.index(point) = Filled
-
-	}
-
-	return grid
-
-}
-
-func (g Grid) raw_index(point Point) *SiteState {
+func (g Grid) raw_index(point Point) *Trail {
 	return &g[point.Y][point.X]
 }
 
-func (g Grid) index(point Point) *SiteState {
+func (g Grid) index(point Point) *Trail {
 	// radius := len(g) / 2
 	// point.X = max(-radius, min(radius, point.X))
 	// point.Y = max(-radius, min(radius, point.Y))
@@ -1037,11 +1039,18 @@ func (g Grid) index(point Point) *SiteState {
 	return &g[point.Y][point.X]
 }
 
+func (g Grid) indexCoords(x, y int) *Trail {
+	x = max(0, min(len(g), x))
+	y = max(0, min(len(g), y))
+
+	return &g[y][x]
+}
+
 func (v *Vector) roundToPoint() Point {
 	return Point{X: round(v.x), Y: round(v.y)}
 }
 
-func (g Grid) vectorIndex(vector Vector) *SiteState {
+func (g Grid) vectorIndex(vector Vector) *Trail {
 
 	copied := vector
 	return g.index(copied.roundToPoint())
@@ -1127,8 +1136,8 @@ func init_model(size int) Model {
 
 	for y := range size {
 		for x := range size {
-			if model.grid[y][x] > 0 {
-				model.particlesInGrid += int(model.grid[y][x])
+			if !model.grid[y][x].isEmpty() {
+				model.particlesInGrid += int(model.grid[y][x].value)
 				model.rootGrid[y][x] = ROOT_MIXED
 			}
 		}
@@ -1141,18 +1150,6 @@ func init_model(size int) Model {
 
 func (m *Model) origin() Point {
 	return Point{X: 0, Y: 0}
-}
-
-func (m *Model) countNeibors(point Point) int {
-	neighbors := 0
-	for _, step := range CARDINALS {
-		new_point := add_points(point, step)
-		if m.grid.is_valid_point(new_point) && *m.grid.index(new_point) > 0 {
-			neighbors++
-		}
-	}
-
-	return neighbors
 }
 
 func (m *Model) onPerimeter(point Point) bool {
@@ -1170,38 +1167,6 @@ func (m *Model) onPerimeter(point Point) bool {
 		return false
 	}
 
-}
-
-func (m *Model) countOnRadius(radius int) int {
-	count := 0
-
-	if radius == 0 {
-		return 1
-	}
-
-	for i := range radius*2 + 1 {
-		i -= radius
-
-		if *m.grid.index(Point{X: i, Y: -radius}) > 0 {
-			count++
-		}
-		if *m.grid.index(Point{X: i, Y: radius}) > 0 {
-			count++
-		}
-	}
-	// dont wanna double count the corners
-	for i := range radius*2 - 1 {
-		i -= radius
-
-		if *m.grid.index(Point{X: -radius, Y: i}) > 0 {
-			count++
-		}
-		if *m.grid.index(Point{X: radius, Y: i}) > 0 {
-			count++
-		}
-	}
-
-	return count
 }
 
 func dotProduct(v1, v2 Vector) float64 {
@@ -1267,7 +1232,7 @@ func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
 	for y := yMin; y <= yMax; y++ {
 		for x := xMin; x <= xMax; x++ {
 			trailStrength := m.grid[y][x]
-			if trailStrength <= Empty {
+			if trailStrength.isEmpty() {
 				continue
 			}
 			owner := m.rootGrid[y][x]
@@ -1292,7 +1257,7 @@ func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
 				continue
 			}
 
-			weight := float64(trailStrength) * radialWeight * ownershipFactor
+			weight := float64(trailStrength.value) * radialWeight * ownershipFactor
 			direction := Vector{x: dx, y: dy}
 			direction.normalize()
 			direction.scale(weight)
@@ -1338,8 +1303,8 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 		alive = true
 
-		var new_vec Vector
-		var new_point Point
+		// var new_vec Vector
+		// var new_point Point
 
 		velo := walker.velocity
 		force := mouseTarget
@@ -1353,26 +1318,22 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		velo.add(force)
 		// velo.add(WEIGHT_VECTOR)
 
-		totalTrail := 0.0
+		force = ZERO_VECTOR
 		for _, bird := range UNITS {
-			totalTrail += float64(*m.grid.vectorIndex(add_vectors(walker.location, bird)))
-		}
 
-		if totalTrail > 0 {
-			for i := range UNITS {
+			trail := *m.grid.vectorIndex(add_vectors(walker.location, bird))
 
-				new_vec = add_vectors(walker.location, UNITS[i])
+			// this will not become a problem
+			if trail.playerNum == m.turn+1 {
 
-				new_point = new_vec.roundToPoint()
+				bird.scale(float64(trail.value))
+				force.add(bird)
 
-				if *m.grid.index(new_point) > 0 {
-					direction := UNITS[i]
-					direction.scale(float64(*m.grid.index(new_point)) / totalTrail)
-					velo.add(direction)
-					// probs[i] *= SACRIFICE
-				}
 			}
 		}
+
+		force.normalize()
+		velo.add(force)
 
 		if campForce, ok := m.forceCAMPish(walker.location, walker.rootID); ok &&
 			r.Float64() < FORCE_CAMP_COMMIT_FRACTION {
@@ -1637,8 +1598,10 @@ func newLiveGame(p float64, distance int) *LiveGame {
 	model.players[0] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn1)}
 	model.players[1] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn2)}
 
-	for _, player := range model.players {
-		*model.grid.vectorIndex(player.spawn) = Filled
+	for i, player := range model.players {
+		*model.grid.vectorIndex(player.spawn) = Trail{playerNum: i + 1, value: 1}
+		point := player.spawn.roundToPoint()
+		fmt.Println(*model.grid.indexCoords(point.X, point.Y))
 	}
 
 	return &LiveGame{
@@ -1673,7 +1636,8 @@ func (g *LiveGame) step() bool {
 
 	for i := range g.model.size {
 		for j := range g.model.size {
-			g.model.grid[i][j] += g.model.nextGrid[i][j]
+			// g.model.grid[i][j] += g.model.nextGrid[i][j]
+
 			incomingOwner := g.model.nextRoot[i][j]
 			if incomingOwner == ROOT_NONE {
 				continue
@@ -1928,14 +1892,20 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 
 	scale := int(SCALE)
 
-	*grid.index(mid_point()) = Origin
+	// *grid.index(mid_point()) = Origin
 
 	// cropped := model.size - model.distance*2
 
 	// for y, row := range grid[model.distance : model.size-model.distance] {
 	// 	for x, value := range row[model.distance : model.size-model.distance] {
 	for y, row := range grid {
-		for x, value := range row {
+		for x, trail := range row {
+
+			if trail.isEmpty() {
+				continue
+			}
+
+			value := SiteState(trail.value)
 
 			var color color.Color
 			if value < 0 {
@@ -1958,42 +1928,42 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 
 }
 
-func grid2png(grid Grid) *image.NRGBA {
-
-	size := len(grid)
-	screen_size := 960
-
-	scale := screen_size / size
-
-	*grid.index(mid_point()) = Origin
-
-	// cropped := model.size - model.distance*2
-
-	img := image.NewNRGBA(image.Rect(0, 0, size*scale, size*scale))
-
-	// for y, row := range grid[model.distance : model.size-model.distance] {
-	// 	for x, value := range row[model.distance : model.size-model.distance] {
-	for y, row := range grid {
-		for x, value := range row {
-
-			var color color.Color
-			if value <= 0 {
-				color = StateColor[value]
-			} else {
-				flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
-				color = FLOW_PALETTE[flowBucket]
-			}
-
-			for i := range scale {
-				for j := range scale {
-					img.Set(x*scale+j, y*scale+i, color)
-				}
-			}
-		}
-	}
-
-	return img
-}
+// func grid2png(grid Grid) *image.NRGBA {
+//
+// 	size := len(grid)
+// 	screen_size := 960
+//
+// 	scale := screen_size / size
+//
+// 	*grid.index(mid_point()) = Origin
+//
+// 	// cropped := model.size - model.distance*2
+//
+// 	img := image.NewNRGBA(image.Rect(0, 0, size*scale, size*scale))
+//
+// 	// for y, row := range grid[model.distance : model.size-model.distance] {
+// 	// 	for x, value := range row[model.distance : model.size-model.distance] {
+// 	for y, row := range grid {
+// 		for x, value := range row {
+//
+// 			var color color.Color
+// 			if value <= 0 {
+// 				color = StateColor[value]
+// 			} else {
+// 				flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
+// 				color = FLOW_PALETTE[flowBucket]
+// 			}
+//
+// 			for i := range scale {
+// 				for j := range scale {
+// 					img.Set(x*scale+j, y*scale+i, color)
+// 				}
+// 			}
+// 		}
+// 	}
+//
+// 	return img
+// }
 
 func Pointer[T any](t T) *T {
 	return &t
