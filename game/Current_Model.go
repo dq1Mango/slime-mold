@@ -1288,6 +1288,7 @@ func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
 	return campForce, true
 }
 
+// gotta pay tribute
 func (m *Model) johnTick(r *rand.Rand) bool {
 	player := m.currentPlayer()
 
@@ -1879,6 +1880,20 @@ var FLOW_PALETTE = [FLOW_LEVELS]color.NRGBA{
 	{R: 181, G: 36, B: 48, A: 255},
 }
 
+// yep i added all those comment myself trust
+var OPPOSITE_FLOW_PALETTE = [FLOW_LEVELS]color.NRGBA{
+	{R: 255, G: 180, B: 70, A: 255},  // 0: Bright Orange/Yellow (Opposite of Dark Blue)
+	{R: 220, G: 120, B: 80, A: 255},  // 1: Medium Orange (Opposite of Medium Blue)
+	{R: 255, G: 210, B: 100, A: 255}, // 2: Yellow/Gold (Opposite of Cyan)
+	{R: 190, G: 90, B: 40, A: 255},   // 3: Reddish-Orange/Rust (Opposite of Greenish Blue)
+	{R: 90, G: 150, B: 200, A: 255},  // 4: Blue/Cyan (Opposite of Yellowish Green)
+	{R: 160, G: 100, B: 80, A: 255},  // 5: Muted Red/Brown (Opposite of Olive Green)
+	{R: 100, G: 180, B: 150, A: 255}, // 6: Muted Cyan/Blue (Opposite of Orange)
+	{R: 50, G: 150, B: 255, A: 255},  // 7: Bright Blue/Cyan (Opposite of Bright Orange)
+	{R: 30, G: 100, B: 130, A: 255},  // 8: Dark Teal/Blue-Green (Opposite of Dark Orange)
+	{R: 50, G: 20, B: 100, A: 255},   // 9: Deep Blue/Indigo (Opposite of Dark Red)
+}
+
 func quantizeFlowBucket(value float64, levels int) int {
 	if levels <= 1 || value <= 0 {
 		return 0
@@ -1912,7 +1927,15 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 				color = StateColor[value]
 			} else if value > 0 {
 				flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
-				color = FLOW_PALETTE[flowBucket]
+
+				if trail.playerNum == 1 {
+					color = FLOW_PALETTE[flowBucket]
+
+				} else if trail.playerNum == 2 {
+					color = OPPOSITE_FLOW_PALETTE[flowBucket]
+				} else {
+					println("uknown playnernum: ", trail.playerNum)
+				}
 			} else {
 				continue
 			}
@@ -1928,57 +1951,6 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 
 }
 
-// func grid2png(grid Grid) *image.NRGBA {
-//
-// 	size := len(grid)
-// 	screen_size := 960
-//
-// 	scale := screen_size / size
-//
-// 	*grid.index(mid_point()) = Origin
-//
-// 	// cropped := model.size - model.distance*2
-//
-// 	img := image.NewNRGBA(image.Rect(0, 0, size*scale, size*scale))
-//
-// 	// for y, row := range grid[model.distance : model.size-model.distance] {
-// 	// 	for x, value := range row[model.distance : model.size-model.distance] {
-// 	for y, row := range grid {
-// 		for x, value := range row {
-//
-// 			var color color.Color
-// 			if value <= 0 {
-// 				color = StateColor[value]
-// 			} else {
-// 				flowBucket := quantizeFlowBucket(float64(value), FLOW_LEVELS)
-// 				color = FLOW_PALETTE[flowBucket]
-// 			}
-//
-// 			for i := range scale {
-// 				for j := range scale {
-// 					img.Set(x*scale+j, y*scale+i, color)
-// 				}
-// 			}
-// 		}
-// 	}
-//
-// 	return img
-// }
-
 func Pointer[T any](t T) *T {
 	return &t
 }
-
-/*
-	func find_max(data []opts.Chart3DData) float32 {
-		greatest := float64(0)
-		return float32(greatest)
-	}
-
-	func make_3d_chart(data []opts.Chart3DData) {
-		surface := charts.NewSurface3D()
-	}
-*/
-
-// func cast_to_float(input []any) ([]float64, error) {
-// 	output := make([]float64, len(input))
