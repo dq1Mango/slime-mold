@@ -34,10 +34,10 @@ const GRID_SIZE = 200
 const SACRIFICE = 0
 const SELFISH = 0
 
-const SPLIT = 0
-const MAX_CELL_PARTICLES = 6
+const SPLIT = 0.1
+const MAX_CELL_PARTICLES = 7
 const TOTAL_PARTICLE_RESOURCES = 1000
-const HIGH_FLOW_THRESHOLD = 10
+const HIGH_FLOW_THRESHOLD = 4
 const RESOURCE_PRESSURE_THRESHOLD = 2
 const RESOURCE_REFILL_BATCH = 8
 const RESOURCE_CAP_REGEN_PER_TICK = 50
@@ -50,6 +50,18 @@ const FORCE_CAMP_PULL = 1.0
 const FORCE_CAMP_MIN_COMMIT = 0.92
 const FORCE_CAMP_COMMIT_FRACTION = 0.35
 const FORCE_CAMP_MIXED_ROOT_WEIGHT = 0.2
+const CONTROL_TARGET_PULL = 0.55
+const CONTROL_TRAIL_PULL = 0.9
+const CONTROL_INERTIA = 0.65
+const CONTROL_WANDER = 0.18
+const CONTROL_STEP_SIZE = 1.0
+const CONTROL_MAX_TURN_RADIANS = 0.55
+const CONTROL_SPLIT_BRANCH_ANGLE = 1.0471975512
+const CONTACT_EROSION_RADIUS = 1
+const CONTACT_EROSION_CENTER_DAMAGE = 1
+const CONTACT_EROSION_CENTER_PROB = 0.45
+const CONTACT_EROSION_RING1_PROB = 0.12
+const CONTACT_EROSION_RING2_PROB = 0.0
 const ROOT_NONE = -1
 const ROOT_MIXED = -2
 
@@ -371,6 +383,8 @@ type Model struct {
 
 	players []Player
 	turn    int
+	// Remaining total resources for each side (index 0 -> player 1/red, 1 -> player 2/blue).
+	playerRemaining []int
 
 	grids           []Grid
 	size            int
@@ -501,10 +515,27 @@ func (m *Model) clear() {
 	m.nextRootID = 0
 	m.particlesInGrid = 0
 	m.freeParticles = TOTAL_PARTICLE_RESOURCES
+	m.ensurePlayerRemaining()
+	for i := range m.playerRemaining {
+		m.playerRemaining[i] = TOTAL_PARTICLE_RESOURCES
+	}
 
 	for i := range m.players {
 		m.players[i].walkers = []TreeWalker{}
 
+	}
+}
+
+func (m *Model) seedPlayersFromMap(theMap *Map) {
+	m.players = make([]Player, 2)
+	m.players[0] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn1)}
+	m.players[1] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn2)}
+	m.ensurePlayerRemaining()
+
+	for i, player := range m.players {
+		*m.grid.vectorIndex(player.spawn) = Trail{playerNum: i + 1, value: 1}
+		point := player.spawn.roundToPoint()
+		fmt.Println(*m.grid.indexCoords(point.X, point.Y))
 	}
 }
 
@@ -516,6 +547,119 @@ func (m *Model) allocateRootID() int {
 
 func (m *Model) currentPlayer() *Player {
 	return &m.players[m.turn]
+}
+
+func (m *Model) ensurePlayerRemaining() {
+	if len(m.playerRemaining) == len(m.players) {
+		return
+	}
+
+	remaining := make([]int, len(m.players))
+	for i := range remaining {
+		remaining[i] = TOTAL_PARTICLE_RESOURCES
+	}
+	m.playerRemaining = remaining
+}
+
+func (m *Model) losePlayerResources(playerNum int, amount int) {
+	if amount <= 0 {
+		return
+	}
+	idx := playerNum - 1
+	if idx < 0 || idx >= len(m.playerRemaining) {
+		return
+	}
+	m.playerRemaining[idx] = max(0, m.playerRemaining[idx]-amount)
+}
+
+func (m *Model) gainPlayerResources(playerNum int, amount int) {
+	if amount <= 0 {
+		return
+	}
+	idx := playerNum - 1
+	if idx < 0 || idx >= len(m.playerRemaining) {
+		return
+	}
+	m.playerRemaining[idx] = min(TOTAL_PARTICLE_RESOURCES, m.playerRemaining[idx]+amount)
+}
+
+func (m *Model) dissolveDisconnectedNear(playerNum int, contact Point) int {
+	if playerNum <= 0 || playerNum > len(m.players) {
+		return 0
+	}
+
+	anchor := m.players[playerNum-1].spawn.roundToPoint()
+	if anchor.X < 0 || anchor.X >= m.size || anchor.Y < 0 || anchor.Y >= m.size {
+		return 0
+	}
+	if m.grid[anchor.Y][anchor.X].playerNum != playerNum {
+		// If the origin is not occupied by this player, do not dissolve everything.
+		return 0
+	}
+
+	connected := make(map[Point]bool)
+	queue := []Point{anchor}
+	connected[anchor] = true
+
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, d := range CARDINALS {
+			n := add_points(cur, d)
+			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
+				continue
+			}
+			if connected[n] || m.grid[n.Y][n.X].playerNum != playerNum {
+				continue
+			}
+			connected[n] = true
+			queue = append(queue, n)
+		}
+	}
+
+	best := Point{X: -1, Y: -1}
+	bestValue := math.MaxInt
+	bestDistSq := math.MaxInt
+	for y := 0; y < m.size; y++ {
+		for x := 0; x < m.size; x++ {
+			if m.grid[y][x].playerNum != playerNum {
+				continue
+			}
+			p := Point{X: x, Y: y}
+			if connected[p] {
+				continue
+			}
+
+			value := m.grid[y][x].value
+			dx := x - contact.X
+			dy := y - contact.Y
+			distSq := dx*dx + dy*dy
+
+			if value < bestValue || (value == bestValue && distSq < bestDistSq) {
+				best = p
+				bestValue = value
+				bestDistSq = distSq
+			}
+		}
+	}
+
+	dissolved := 0
+	if best.X != -1 {
+		m.grid[best.Y][best.X].value--
+		dissolved = 1
+		if m.grid[best.Y][best.X].value <= 0 {
+			m.grid[best.Y][best.X] = EmptyTrail
+			m.rootGrid[best.Y][best.X] = ROOT_NONE
+		}
+		m.particlesInGrid--
+		m.freeParticles++
+	}
+
+	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
+	m.freeParticles = min(maxFree, max(0, m.freeParticles))
+	m.particlesInGrid = max(0, m.particlesInGrid)
+
+	return dissolved
 }
 
 func (m *Model) cullWeakWalkers() {
@@ -914,6 +1058,71 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 	return false
 }
 
+func (m *Model) erodeTrailAt(p Point, amount int) {
+	if amount <= 0 {
+		return
+	}
+	if p.X < 0 || p.X >= m.size || p.Y < 0 || p.Y >= m.size {
+		return
+	}
+
+	cell := &m.grid[p.Y][p.X]
+	if cell.isEmpty() {
+		return
+	}
+
+	removed := min(amount, cell.value)
+	cell.value -= removed
+	if cell.value <= 0 {
+		m.grid[p.Y][p.X] = EmptyTrail
+		m.rootGrid[p.Y][p.X] = ROOT_NONE
+	}
+
+	m.particlesInGrid -= removed
+	m.freeParticles += removed
+}
+
+func (m *Model) erodeContactZone(center Point, r *rand.Rand) {
+	yMin := max(0, center.Y-CONTACT_EROSION_RADIUS)
+	yMax := min(m.size-1, center.Y+CONTACT_EROSION_RADIUS)
+	xMin := max(0, center.X-CONTACT_EROSION_RADIUS)
+	xMax := min(m.size-1, center.X+CONTACT_EROSION_RADIUS)
+
+	for y := yMin; y <= yMax; y++ {
+		for x := xMin; x <= xMax; x++ {
+			dist := max(abs(x-center.X), abs(y-center.Y))
+			if dist > CONTACT_EROSION_RADIUS {
+				continue
+			}
+
+			p := Point{X: x, Y: y}
+			if m.grid[y][x].isEmpty() {
+				continue
+			}
+
+			if dist == 0 {
+				if r.Float64() <= CONTACT_EROSION_CENTER_PROB {
+					m.erodeTrailAt(p, CONTACT_EROSION_CENTER_DAMAGE)
+				}
+				continue
+			}
+
+			prob := CONTACT_EROSION_RING2_PROB
+			if dist == 1 {
+				prob = CONTACT_EROSION_RING1_PROB
+			}
+
+			if r.Float64() <= prob {
+				m.erodeTrailAt(p, 1)
+			}
+		}
+	}
+
+	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
+	m.freeParticles = min(maxFree, max(0, m.freeParticles))
+	m.particlesInGrid = max(0, m.particlesInGrid)
+}
+
 func (m *Model) addParticleAt(p Point, rootID int) bool {
 
 	if p.X < 0 || p.X >= m.size || p.Y < 0 || p.Y >= m.size {
@@ -933,6 +1142,10 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 		}
 	}
 
+	if len(m.playerRemaining) > m.turn && m.playerRemaining[m.turn] <= 0 {
+		return false
+	}
+
 	if m.grid.index(p).isEmpty() {
 		*m.grid.index(p) = Trail{playerNum: m.turn + 1, value: 1}
 	} else {
@@ -940,6 +1153,7 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 	}
 	m.particlesInGrid++
 	m.freeParticles--
+	m.losePlayerResources(m.turn+1, 1)
 
 	existingOwner := m.rootGrid[p.Y][p.X]
 	if existingOwner == ROOT_NONE {
@@ -1094,6 +1308,51 @@ func random_step(r *rand.Rand) Point {
 		return Point{X: 0, Y: -1}
 	}
 
+}
+
+func randomUnitVector(r *rand.Rand) Vector {
+	v := Vector{x: r.Float64()*2 - 1, y: r.Float64()*2 - 1}
+	if v.magnitude() == 0 {
+		return Vector{x: 1, y: 0}
+	}
+	v.normalize()
+	return v
+}
+
+func steerTowards(current, desired Vector, maxTurn float64) Vector {
+	if desired.magnitude() == 0 {
+		return current
+	}
+	if current.magnitude() == 0 {
+		desired.normalize()
+		return desired
+	}
+
+	cur := current
+	cur.normalize()
+	des := desired
+	des.normalize()
+
+	curAngle := math.Atan2(cur.y, cur.x)
+	desAngle := math.Atan2(des.y, des.x)
+	delta := desAngle - curAngle
+
+	for delta > math.Pi {
+		delta -= 2 * math.Pi
+	}
+	for delta < -math.Pi {
+		delta += 2 * math.Pi
+	}
+
+	if delta > maxTurn {
+		delta = maxTurn
+	}
+	if delta < -maxTurn {
+		delta = -maxTurn
+	}
+
+	newAngle := curAngle + delta
+	return Vector{x: math.Cos(newAngle), y: math.Sin(newAngle)}
 }
 
 func init_model(size int) Model {
@@ -1295,8 +1554,6 @@ func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
 func (m *Model) johnTick(r *rand.Rand) bool {
 	player := m.currentPlayer()
 
-	mouseTarget := subtract(vectorFromPoint(LIVE_MOUSE_POINT), player.spawn)
-
 	alive := false
 
 	for i, walker := range player.walkers {
@@ -1310,45 +1567,58 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		// var new_vec Vector
 		// var new_point Point
 
-		velo := walker.velocity
-		force := mouseTarget
-		if LIVE_FORCE_ATTRACT {
-			force = subtract(vectorFromPoint(LIVE_MOUSE_POINT), player.spawn)
-			// change this if u want it to be like it was before
-			// force = curvyForce(subtract(walker.location, m.spawn), mouseTarget)
-			// force = attractionForce(walker.location, LIVE_MOUSE_TARGET)
+		velocity := walker.velocity
+		if velocity.magnitude() == 0 {
+			velocity = randomUnitVector(r)
 		}
-		force.normalize()
-		velo.add(force)
-		// velo.add(WEIGHT_VECTOR)
+		velocity.normalize()
+		velocity.scale(CONTROL_INERTIA)
 
-		force = ZERO_VECTOR
+		target := vectorFromPoint(LIVE_MOUSE_POINT)
+		toTarget := subtract(target, walker.location)
+		if !LIVE_FORCE_ATTRACT {
+			// Softer influence when direct attract mode is not active.
+			toTarget.scale(0.5)
+		}
+		if toTarget.magnitude() > 0 {
+			toTarget.normalize()
+			toTarget.scale(CONTROL_TARGET_PULL)
+			velocity.add(toTarget)
+		}
+
+		trailForce := ZERO_VECTOR
 		for _, bird := range UNITS {
-
 			trail := *m.grid.vectorIndex(add_vectors(walker.location, bird))
-
-			// this will not become a problem
 			if trail.playerNum == m.turn+1 {
-
-				bird.scale(float64(trail.value))
-				force.add(bird)
-
+				dir := bird
+				dir.scale(float64(trail.value))
+				trailForce.add(dir)
 			}
 		}
+		if trailForce.magnitude() > 0 {
+			trailForce.normalize()
+			trailForce.scale(CONTROL_TRAIL_PULL)
+			velocity.add(trailForce)
+		}
 
-		force.normalize()
-		velo.add(force)
+		wander := randomUnitVector(r)
+		wander.scale(CONTROL_WANDER)
+		velocity.add(wander)
 
 		if campForce, ok := m.forceCAMPish(walker.location, walker.rootID); ok &&
 			r.Float64() < FORCE_CAMP_COMMIT_FRACTION {
-			velo = campForce
+			velocity.add(campForce)
 		}
 
-		// new_vec = add_vectors(walker.location, UNITS[selection])
+		desired := velocity
+		if desired.magnitude() == 0 {
+			desired = randomUnitVector(r)
+		}
+		newDir := steerTowards(walker.velocity, desired, CONTROL_MAX_TURN_RADIANS)
+		newDir.scale(CONTROL_STEP_SIZE)
 
-		velo.normalize()
-		player.walkers[i].location.add(velo)
-		player.walkers[i].velocity = velo
+		player.walkers[i].location.add(newDir)
+		player.walkers[i].velocity = newDir
 
 		quantized := player.walkers[i].location.roundToPoint()
 
@@ -1359,20 +1629,12 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 		trail := m.grid.index(quantized)
 		if !trail.isEmpty() && trail.playerNum != m.turn+1 {
-			fmt.Println("detected adversary")
-			// hah get it?
-			INTensity := int(walker.intensity)
-			if trail.value > INTensity {
-				trail.value -= INTensity
-				walker.intensity = 0
-
-			} else if trail.value < INTensity {
-				*trail = Trail{playerNum: m.turn + 1, value: 1}
-			} else {
-
-				*trail = EmptyTrail
-			}
-		} else if m.depositWithOverflow(quantized, velo, walker.rootID) {
+			enemyPlayer := trail.playerNum
+			dissolved := m.dissolveDisconnectedNear(enemyPlayer, quantized)
+			m.gainPlayerResources(m.turn+1, dissolved)
+			m.losePlayerResources(enemyPlayer, dissolved)
+			player.walkers[i].intensity = max(0, player.walkers[i].intensity-0.5)
+		} else if m.depositWithOverflow(quantized, newDir, walker.rootID) {
 			player.walkers[i].intensity -= 1
 		}
 
@@ -1392,12 +1654,13 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 			newVelo := og.velocity
 
 			if rand.Float64() < 0.5 {
-				newVelo.rotate(math.Pi / 2)
+				newVelo.rotate(CONTROL_SPLIT_BRANCH_ANGLE)
 			} else {
-				newVelo.rotate(-math.Pi / 2)
+				newVelo.rotate(-CONTROL_SPLIT_BRANCH_ANGLE)
 			}
 
-			newVelo.scale(2)
+			newVelo.normalize()
+			newVelo.scale(CONTROL_STEP_SIZE)
 
 			player.walkers = append(
 				player.walkers,
@@ -1601,8 +1864,11 @@ type LiveGame struct {
 	p        float64
 	distance int
 
-	Turn   int
-	Moving bool
+	Turn       int
+	Moving     bool
+	GameOver   bool
+	Winner     int
+	HasClicked []bool
 }
 
 func newLiveGame(p float64, distance int) *LiveGame {
@@ -1612,30 +1878,114 @@ func newLiveGame(p float64, distance int) *LiveGame {
 	theMap := defaultMap()
 
 	model := init_model(GRID_SIZE)
-	model.players = make([]Player, 2)
-
-	model.players[0] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn1)}
-	model.players[1] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn2)}
-
-	for i, player := range model.players {
-		*model.grid.vectorIndex(player.spawn) = Trail{playerNum: i + 1, value: 1}
-		point := player.spawn.roundToPoint()
-		fmt.Println(*model.grid.indexCoords(point.X, point.Y))
-	}
+	model.seedPlayersFromMap(theMap)
 
 	return &LiveGame{
-		model:    model,
-		theMap:   theMap,
-		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
-		p:        p,
-		distance: distance,
-		Turn:     1,
-		Moving:   false,
+		model:      model,
+		theMap:     theMap,
+		rng:        rand.New(rand.NewSource(time.Now().UnixNano())),
+		p:          p,
+		distance:   distance,
+		Turn:       1,
+		Moving:     false,
+		GameOver:   false,
+		Winner:     0,
+		HasClicked: make([]bool, len(model.players)),
 	}
 }
 
 func (g *LiveGame) reset() {
 	g.model = init_model(GRID_SIZE)
+	g.model.seedPlayersFromMap(g.theMap)
+	g.model.turn = 0
+	g.GameOver = false
+	g.Winner = 0
+	g.Turn = 1
+	g.Moving = false
+	g.HasClicked = make([]bool, len(g.model.players))
+}
+
+func (g *LiveGame) winConditionsArmed() bool {
+	if len(g.HasClicked) < 2 {
+		return false
+	}
+	for _, clicked := range g.HasClicked {
+		if !clicked {
+			return false
+		}
+	}
+	return true
+}
+
+func (g *LiveGame) winnerByBoard() int {
+	redAlive := false
+	blueAlive := false
+
+	for y := 0; y < g.model.size; y++ {
+		for x := 0; x < g.model.size; x++ {
+			cell := g.model.grid[y][x]
+			if cell.isEmpty() {
+				continue
+			}
+			if cell.playerNum == 1 {
+				redAlive = true
+			} else if cell.playerNum == 2 {
+				blueAlive = true
+			}
+			if redAlive && blueAlive {
+				return 0
+			}
+		}
+	}
+
+	if redAlive && !blueAlive {
+		return 1
+	}
+	if blueAlive && !redAlive {
+		return 2
+	}
+
+	return 0
+}
+
+func (g *LiveGame) winnerByHealth() int {
+	g.model.ensurePlayerRemaining()
+	if len(g.model.playerRemaining) < 2 {
+		return 0
+	}
+
+	red := g.model.playerRemaining[0]
+	blue := g.model.playerRemaining[1]
+
+	if red <= 0 && blue > 0 {
+		return 2
+	}
+	if blue <= 0 && red > 0 {
+		return 1
+	}
+
+	return 0
+}
+
+func (g *LiveGame) updateGameOverState() {
+	if g.GameOver {
+		return
+	}
+	if !g.winConditionsArmed() {
+		return
+	}
+
+	winner := g.winnerByHealth()
+	if winner == 0 {
+		winner = g.winnerByBoard()
+	}
+	if winner == 0 {
+		return
+	}
+
+	g.GameOver = true
+	g.Winner = winner
+	g.Moving = false
 }
 
 func (g *LiveGame) toggleTurn() {
@@ -1704,11 +2054,19 @@ func (g *LiveGame) Update() error {
 	LIVE_MOUSE_POINT = mouseTargetPoint(x, y, w, h)
 
 	if inpututil.IsKeyJustPressed(ebiten.KeyC) {
-		g.model.clear()
+		g.reset()
+	}
+
+	g.updateGameOverState()
+	if g.GameOver {
+		return nil
 	}
 
 	if !g.Moving {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			if g.model.turn >= 0 && g.model.turn < len(g.HasClicked) {
+				g.HasClicked[g.model.turn] = true
+			}
 			if !g.model.spawnWalkerAtNearestPlacedParticle(LIVE_MOUSE_POINT) {
 				g.model.spawnWalker()
 			}
@@ -1737,6 +2095,10 @@ func (g *LiveGame) Update() error {
 			g.Moving = false
 			g.toggleTurn()
 			// g.reset()
+			break
+		}
+		g.updateGameOverState()
+		if g.GameOver {
 			break
 		}
 	}
@@ -1781,6 +2143,75 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	op := centeredTextOpts(someText, 3, SCREEN_SIZE/2, 50)
 
 	text.Draw(screen, someText, fontFace, op)
+
+	g.model.ensurePlayerRemaining()
+
+	redRemaining := 0
+	blueRemaining := 0
+	if len(g.model.playerRemaining) > 0 {
+		redRemaining = g.model.playerRemaining[0]
+	}
+	if len(g.model.playerRemaining) > 1 {
+		blueRemaining = g.model.playerRemaining[1]
+	}
+
+	redPct := float64(redRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
+	bluePct := float64(blueRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
+	redPct = max(0, min(1, redPct))
+	bluePct = max(0, min(1, bluePct))
+
+	pad := 24.0
+	barTop := 86.0
+	totalW := float64(SCREEN_SIZE) - pad*2
+	gap := 12.0
+	barW := (totalW - gap) / 2
+	barH := 16.0
+
+	bg := color.NRGBA{R: 34, G: 34, B: 34, A: 220}
+	red := color.NRGBA{R: 220, G: 70, B: 70, A: 240}
+	blue := color.NRGBA{R: 70, G: 130, B: 240, A: 240}
+	labelRed := color.NRGBA{R: 245, G: 160, B: 160, A: 255}
+	labelBlue := color.NRGBA{R: 160, G: 195, B: 255, A: 255}
+
+	leftX := pad
+	rightX := pad + barW + gap
+
+	ebitenutil.DrawRect(screen, leftX, barTop, barW, barH, bg)
+	ebitenutil.DrawRect(screen, rightX, barTop, barW, barH, bg)
+	ebitenutil.DrawRect(screen, leftX, barTop, barW*redPct, barH, red)
+	ebitenutil.DrawRect(screen, rightX, barTop, barW*bluePct, barH, blue)
+
+	redText := fmt.Sprintf("Red %d", redRemaining)
+	blueText := fmt.Sprintf("Blue %d", blueRemaining)
+
+	redOp := &text.DrawOptions{}
+	redOp.GeoM.Translate(leftX, barTop+24)
+	redOp.ColorScale.ScaleWithColor(labelRed)
+	text.Draw(screen, redText, fontFace, redOp)
+
+	blueOp := &text.DrawOptions{}
+	blueOp.GeoM.Translate(rightX, barTop+24)
+	blueOp.ColorScale.ScaleWithColor(labelBlue)
+	text.Draw(screen, blueText, fontFace, blueOp)
+
+	if g.GameOver {
+		winnerText := ""
+		winnerColor := color.NRGBA{R: 255, G: 255, B: 255, A: 255}
+		if g.Winner == 1 {
+			winnerText = "Red Wins"
+			winnerColor = color.NRGBA{R: 240, G: 110, B: 110, A: 255}
+		} else if g.Winner == 2 {
+			winnerText = "Blue Wins"
+			winnerColor = color.NRGBA{R: 110, G: 170, B: 255, A: 255}
+		}
+
+		if winnerText != "" {
+			winOp := centeredTextOpts(winnerText, 4, SCREEN_SIZE/2, SCREEN_SIZE/2)
+			winOp.ColorScale.Reset()
+			winOp.ColorScale.ScaleWithColor(winnerColor)
+			text.Draw(screen, winnerText, fontFace, winOp)
+		}
+	}
 
 }
 
