@@ -1370,7 +1370,6 @@ func init_model(size int) Model {
 		grids:           make([]Grid, 0, 100),
 		size:            size,
 		time:            0,
-		nextRootID:      0,
 		particlesInGrid: 0,
 		freeParticles:   TOTAL_PARTICLE_RESOURCES,
 	}
