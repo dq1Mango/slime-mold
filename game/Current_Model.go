@@ -28,54 +28,54 @@ import (
 	// "slices"
 )
 
-const END_RATIO = 0.01
-const GRID_SIZE = 200
-
-const STATS_HEIGHT = 175
-
-const SACRIFICE = 0
-const SELFISH = 0
-
-const SPLIT = 0.1
-const MAX_CELL_PARTICLES = 7
-const TOTAL_PARTICLE_RESOURCES = 1000
-const HIGH_FLOW_THRESHOLD = 4
-const RESOURCE_PRESSURE_THRESHOLD = 2
-const RESOURCE_REFILL_BATCH = 8
-const RESOURCE_CAP_REGEN_PER_TICK = 50
-const RESOURCE_CAP_BONUS_MAX = 200
-const RECLAIM_SAMPLE_TRIES = 48
-const RECLAIM_MAX_CONNECTIVITY_CHECKS = 6
-const MIN_WALKER_INTENSITY = 1.0
-const FORCE_CAMP_RADIUS = 8
-const FORCE_CAMP_PULL = 1.0
-const FORCE_CAMP_MIN_COMMIT = 0.92
-const FORCE_CAMP_COMMIT_FRACTION = 0.35
-const FORCE_CAMP_MIXED_ROOT_WEIGHT = 0.2
-const CONTROL_TARGET_PULL = 0.55
-const CONTROL_TRAIL_PULL = 0.9
-const CONTROL_INERTIA = 0.65
-const CONTROL_WANDER = 0.18
-const CONTROL_STEP_SIZE = 1.0
-const CONTROL_MAX_TURN_RADIANS = 0.55
-const CONTROL_SPLIT_BRANCH_ANGLE = 1.0471975512
-const CONTACT_EROSION_RADIUS = 1
-const CONTACT_EROSION_CENTER_DAMAGE = 1
-const CONTACT_EROSION_CENTER_PROB = 0.45
-const CONTACT_EROSION_RING1_PROB = 0.12
-const CONTACT_EROSION_RING2_PROB = 0.0
-const ROOT_NONE = -1
-const ROOT_MIXED = -2
-
 const (
+	END_RATIO = 0.01
+	GRID_SIZE = 200
+
+	// Core simulation limits
+	TOTAL_PARTICLE_RESOURCES = 1000
+	MAX_CELL_PARTICLES       = 7
+
+	// Walker behavior
+	SPLIT                    = 0.1
+	MIN_WALKER_INTENSITY     = 1.0
+	CONTROL_STEP_SIZE        = 1.0
+	CONTROL_MAX_TURN_RADIANS = 0.55
+
+	// Root markers
+	ROOT_NONE  = -1
+	ROOT_MIXED = -2
+
+	// Display / timing
 	FPS         = 20.0
 	SCREEN_SIZE = 1000
 	SCALE       = float64(SCREEN_SIZE) / GRID_SIZE
-	LIVE_PULL   = 0.2
+	TPS         = 20
+)
 
-	// game ticks per second
-	TPS = 20
-	// DELAY = 1 / TPS
+const (
+	HIGH_FLOW_THRESHOLD         = 4
+	RESOURCE_PRESSURE_THRESHOLD = 2
+	RESOURCE_REFILL_BATCH       = 8
+	RESOURCE_CAP_REGEN_PER_TICK = 50
+	RESOURCE_CAP_BONUS_MAX      = 200
+
+	RECLAIM_SAMPLE_TRIES            = 48
+	RECLAIM_MAX_CONNECTIVITY_CHECKS = 6
+
+	FORCE_CAMP_RADIUS          = 8
+	FORCE_CAMP_PULL            = 1.0
+	FORCE_CAMP_MIN_COMMIT      = 0.92
+	FORCE_CAMP_COMMIT_FRACTION = 0.35
+
+	CONTROL_TARGET_PULL        = 0.55
+	CONTROL_TRAIL_PULL         = 0.9
+	CONTROL_INERTIA            = 0.65
+	CONTROL_SPLIT_BRANCH_ANGLE = 1.0471975512
+
+	CONTACT_EROSION_RADIUS        = 5
+	CONTACT_EROSION_CENTER_DAMAGE = 5
+	CONTACT_EROSION_CENTER_PROB   = 0.45
 )
 
 var WEIGHT_VECTOR = Vector{x: -1, y: 1}
@@ -514,6 +514,7 @@ func (m *Model) clear() {
 
 	for i := range m.players {
 		m.players[i].walkers = []Walker{}
+		m.players[i].remaining = TOTAL_PARTICLE_RESOURCES
 
 	}
 }
@@ -525,8 +526,8 @@ func (m *Model) seedPlayersFromMap(theMap *Map) {
 
 	for i, player := range m.players {
 		*m.grid.vectorIndex(player.spawn) = Trail{playerNum: i + 1, value: 1}
-		// point := player.spawn.roundToPoint()
-		// fmt.Println(*m.grid.indexCoords(point.X, point.Y))
+		point := player.spawn.roundToPoint()
+		fmt.Println(*m.grid.indexCoords(point.X, point.Y))
 	}
 }
 
@@ -1086,9 +1087,9 @@ func (m *Model) erodeContactZone(center Point, r *rand.Rand) {
 				continue
 			}
 
-			prob := CONTACT_EROSION_RING2_PROB
+			prob := 0.0
 			if dist == 1 {
-				prob = CONTACT_EROSION_RING1_PROB
+				prob = 0.12
 			}
 
 			if r.Float64() <= prob {
@@ -1351,12 +1352,6 @@ func init_model(size int) Model {
 	nextgrid = gen_grid(size)
 	// *nextgrid.index(mid_point()) = Filled
 
-	// walkers := make([]Walker, 1)
-	// walkers[0] = Walker{
-	// 	location: middle,
-	// 	ttl:      tau,
-	// }
-
 	model := Model{
 		grid:     grid,
 		nextGrid: nextgrid,
@@ -1483,7 +1478,7 @@ func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
 
 			ownershipFactor := 1.0
 			if owner == ROOT_MIXED {
-				ownershipFactor = FORCE_CAMP_MIXED_ROOT_WEIGHT
+				ownershipFactor = 0.2
 			}
 
 			dx := float64(x - center.X)
@@ -1529,7 +1524,7 @@ func (m *Model) forceCAMPish(from Vector, rootID int) (Vector, bool) {
 	return campForce, true
 }
 
-// gotta pay tribute
+// gotta pay tribute // very tough
 func (m *Model) johnTick(r *rand.Rand) bool {
 	player := m.currentPlayer()
 
@@ -1581,7 +1576,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		}
 
 		wander := randomUnitVector(r)
-		wander.scale(CONTROL_WANDER)
+		wander.scale(0)
 		velocity.add(wander)
 
 		if campForce, ok := m.forceCAMPish(walker.location, walker.rootID); ok &&
@@ -2019,24 +2014,17 @@ func mouseWeightVector(cursorX, cursorY, width, height int) Vector {
 	return v
 }
 
-func mouseTargetPoint(cursorX, cursorY int) Point {
-	return Point{
-		X: cursorX * GRID_SIZE / SCREEN_SIZE,
-		Y: (cursorY - STATS_HEIGHT) * GRID_SIZE / SCREEN_SIZE,
-	}
+func mouseTargetPoint(cursorX, cursorY, width, height int) Point {
+	return Point{X: cursorX * GRID_SIZE / width, Y: cursorY * GRID_SIZE / height}
 }
 
 // there should probably be a dedicated input handling function
 func (g *LiveGame) Update() error {
 
-	// as long as the window size doesn't change we chilling
-	// w, h := ebiten.WindowSize()
+	w, h := ebiten.WindowSize()
 	x, y := ebiten.CursorPosition()
 
-	LIVE_MOUSE_POINT = mouseTargetPoint(x, y)
-
-	// fmt.Println(x, "-", y)
-	// fmt.Println(LIVE_MOUSE_POINT)
+	LIVE_MOUSE_POINT = mouseTargetPoint(x, y, w, h)
 
 	if inpututil.IsKeyJustPressed(ebiten.KeyC) {
 		g.reset()
@@ -2056,6 +2044,7 @@ func (g *LiveGame) Update() error {
 				g.model.spawnWalker()
 			}
 			g.Moving = true
+			fmt.Println("started moving")
 		}
 	}
 
@@ -2075,6 +2064,7 @@ func (g *LiveGame) Update() error {
 	// Take multiple simulation steps per frame to keep visible growth speed.
 	for range 1 {
 		if g.step() {
+			fmt.Println("stopped moving")
 			g.Moving = false
 			g.toggleTurn()
 			// g.reset()
@@ -2090,43 +2080,14 @@ func (g *LiveGame) Update() error {
 	// return errors.New("bruh")
 }
 
-// x,y is the center of the text
 func centeredTextOpts(theText string, scale float64, x, y float64) *text.DrawOptions {
-	w, h := text.Measure(theText, fontFace, 0)
-
-	x, y = x-scale*w/2, y-scale*h/2
-	// x, y = 50, 50
-	// vector.FillRect(screen, float32(x)-float32(w), float32(y), float32(w), float32(h), gray, false)
-	op := &text.DrawOptions{}
-	op.ColorScale.ScaleWithColor(color.White)
-	op.GeoM.Scale(scale, scale)
-	op.GeoM.Translate(float64(x), float64(y))
-	return op
-}
-
-// x,y is the top left of text
-func leftTextOpts(theText string, scale float64, x, y float64) *text.DrawOptions {
-
-	// x, y = x-scale*w/2, y-scale*h/2
-	// x, y = 50, 50
-	// vector.FillRect(screen, float32(x)-float32(w), float32(y), float32(w), float32(h), gray, false)
-	op := &text.DrawOptions{}
-	op.ColorScale.ScaleWithColor(color.White)
-	op.GeoM.Scale(scale, scale)
-	op.GeoM.Translate(float64(x), float64(y))
-	return op
-
-}
-
-// x,y is the rop right of the text
-func rightTextOpts(theText string, scale float64, x, y float64) *text.DrawOptions {
-	w, _ := text.Measure(
+	w, h := text.Measure(
 		theText,
 		fontFace,
 		0,
 	) // The left upper point is not x but x-w, since the text runs in the rigth-to-left direction.
 
-	x = x - scale*w
+	x, y = x-scale*w/2, y-scale*h/2
 	// x, y = 50, 50
 	// vector.FillRect(screen, float32(x)-float32(w), float32(y), float32(w), float32(h), gray, false)
 	op := &text.DrawOptions{}
@@ -2186,8 +2147,6 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	leftX := pad
 	rightX := pad + barW + gap
 
-	// DrawRect is deprecated ...
-	// not that we r gonna fix it but yeah
 	ebitenutil.DrawRect(screen, leftX, barTop, barW, barH, bg)
 	ebitenutil.DrawRect(screen, rightX, barTop, barW, barH, bg)
 	ebitenutil.DrawRect(screen, leftX, barTop, barW*redPct, barH, red)
@@ -2197,13 +2156,11 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	blueText := fmt.Sprintf("Blue %d", blueRemaining)
 
 	redOp := &text.DrawOptions{}
-	redOp.GeoM.Scale(2, 2)
 	redOp.GeoM.Translate(leftX, barTop+24)
 	redOp.ColorScale.ScaleWithColor(labelRed)
 	text.Draw(screen, redText, fontFace, redOp)
 
 	blueOp := &text.DrawOptions{}
-	blueOp.GeoM.Scale(2, 2)
 	blueOp.GeoM.Translate(rightX, barTop+24)
 	blueOp.ColorScale.ScaleWithColor(labelBlue)
 	text.Draw(screen, blueText, fontFace, blueOp)
@@ -2227,33 +2184,22 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 		}
 	}
 
-	const DIVIDER_HEIGHT = 5
-	ebitenutil.DrawRect(
-		screen,
-		0,
-		STATS_HEIGHT-DIVIDER_HEIGHT,
-		SCREEN_SIZE,
-		DIVIDER_HEIGHT,
-		color.White,
-	)
-
 }
-
-const OAT_MAX_SCALE = 0.2
-const OAT_MIN_SCALE = 0.05
-const OAT_MAX_QUANTITY = 100.0
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
 
 	ebitenutil.DebugPrint(screen, "Click to spawn\nC to clear")
 
+	// opts := &ebiten.DrawImageOptions{}
+	// opts.GeoM.Scale(0.1, 0.1)
+	// opts.GeoM.Translate(SCREEN_SIZE/2, SCREEN_SIZE/2)
+	// screen.DrawImage(OatImage, opts)
+	//
+	oatScale := 0.2
+
 	// this should be made a bg image istead of making it every frame
 	for _, food := range g.theMap.Foods {
 		size := float64(OatImage.Bounds().Size().X)
-
-		oatScale := OAT_MIN_SCALE + (OAT_MAX_SCALE-OAT_MIN_SCALE)/OAT_MAX_QUANTITY*float64(
-			food.Quantity,
-		)
 		size *= oatScale
 
 		opts := &ebiten.DrawImageOptions{}
@@ -2262,7 +2208,7 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 
 		opts.GeoM.Translate(
 			float64(food.Position.X)*SCALE,
-			float64(food.Position.Y)*SCALE+STATS_HEIGHT,
+			float64(food.Position.Y)*SCALE,
 		)
 		opts.GeoM.Translate(-size/2, -size/2)
 		// opts.GeoM.Translate(
@@ -2280,10 +2226,9 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 }
 
 func (g *LiveGame) Layout(outsideWidth, outsideHeight int) (int, int) {
-	// scale := SCREEN_SIZE / GRID_SIZE
-	// side := GRID_SIZE * scale
-	// return side, side
-	return SCREEN_SIZE, SCREEN_SIZE + STATS_HEIGHT
+	scale := SCREEN_SIZE / GRID_SIZE
+	side := GRID_SIZE * scale
+	return side, side
 }
 
 func runLive() {
@@ -2295,7 +2240,7 @@ func runLive() {
 	// SCALE = float64(SCREEN_SIZE) / GRID_SIZE
 	side := int(GRID_SIZE * SCALE)
 
-	ebiten.SetWindowSize(side, side+STATS_HEIGHT)
+	ebiten.SetWindowSize(side, side)
 	ebiten.SetWindowTitle("Slime Mold - Mouse Force")
 
 	if err := ebiten.RunGame(game); err != nil {
@@ -2397,20 +2342,14 @@ func (g Gradient) At(t float64) color.NRGBA {
 	}
 }
 
-var RED_END = color.NRGBA{R: 255, A: 255}
-var RED_START = color.NRGBA{R: 100, A: 255}
-
 var RedGradient = Gradient{
-	Start: RED_START,
-	End:   RED_END,
+	Start: color.NRGBA{R: 100, A: 255},
+	End:   color.NRGBA{R: 255, A: 255},
 }
 
-var BLUE_START = color.NRGBA{R: 15, B: 100, G: 40, A: 255}
-var BLUE_END = color.NRGBA{R: 40, B: 255, G: 135, A: 255}
-
 var BlueGradient = Gradient{
-	Start: BLUE_START,
-	End:   BLUE_END,
+	Start: color.NRGBA{R: 15, B: 100, G: 40, A: 255},
+	End:   color.NRGBA{R: 40, B: 255, G: 135, A: 255},
 }
 
 func copyGrid2Image(grid Grid, image *ebiten.Image) {
@@ -2455,7 +2394,7 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 			// image.WritePixels()
 			for i := range scale {
 				for j := range scale {
-					image.Set(x*scale+j, y*scale+i+STATS_HEIGHT, colour)
+					image.Set(x*scale+j, y*scale+i, colour)
 				}
 			}
 		}
