@@ -361,11 +361,6 @@ func (p *Point) radius() int {
 }
 
 type Walker struct {
-	location Point
-	ttl      int
-}
-
-type TreeWalker struct {
 	location  Vector
 	intensity float64
 	velocity  Vector
@@ -373,8 +368,9 @@ type TreeWalker struct {
 }
 
 type Player struct {
-	walkers []TreeWalker
-	spawn   Vector
+	walkers   []Walker
+	spawn     Vector
+	remaining int
 }
 
 type Model struct {
@@ -385,8 +381,6 @@ type Model struct {
 
 	players []Player
 	turn    int
-	// Remaining total resources for each side (index 0 -> player 1/red, 1 -> player 2/blue).
-	playerRemaining []int
 
 	grids           []Grid
 	size            int
@@ -407,7 +401,7 @@ func (m *Model) spawnWalker() {
 	rootID := m.allocateRootID()
 	player.walkers = append(
 		player.walkers,
-		TreeWalker{location: vectorFromPoint(middle), intensity: 100, rootID: rootID},
+		Walker{location: vectorFromPoint(middle), intensity: 100, rootID: rootID},
 	)
 }
 
@@ -502,7 +496,7 @@ func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point) bool {
 		intensity := spawnResourceBudget * (weights[i] / totalWeight)
 		player.walkers = append(
 			player.walkers,
-			TreeWalker{location: vectorFromPoint(c.point), intensity: intensity, rootID: rootID},
+			Walker{location: vectorFromPoint(c.point), intensity: intensity, rootID: rootID},
 		)
 	}
 
@@ -517,22 +511,17 @@ func (m *Model) clear() {
 	m.nextRootID = 0
 	m.particlesInGrid = 0
 	m.freeParticles = TOTAL_PARTICLE_RESOURCES
-	m.ensurePlayerRemaining()
-	for i := range m.playerRemaining {
-		m.playerRemaining[i] = TOTAL_PARTICLE_RESOURCES
-	}
 
 	for i := range m.players {
-		m.players[i].walkers = []TreeWalker{}
+		m.players[i].walkers = []Walker{}
 
 	}
 }
 
 func (m *Model) seedPlayersFromMap(theMap *Map) {
 	m.players = make([]Player, 2)
-	m.players[0] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn1)}
-	m.players[1] = Player{walkers: make([]TreeWalker, 0), spawn: vectorFromPoint(theMap.Spawn2)}
-	m.ensurePlayerRemaining()
+	m.players[0] = Player{walkers: make([]Walker, 0), spawn: vectorFromPoint(theMap.Spawn1), remaining: TOTAL_PARTICLE_RESOURCES}
+	m.players[1] = Player{walkers: make([]Walker, 0), spawn: vectorFromPoint(theMap.Spawn2), remaining: TOTAL_PARTICLE_RESOURCES}
 
 	for i, player := range m.players {
 		*m.grid.vectorIndex(player.spawn) = Trail{playerNum: i + 1, value: 1}
@@ -551,27 +540,15 @@ func (m *Model) currentPlayer() *Player {
 	return &m.players[m.turn]
 }
 
-func (m *Model) ensurePlayerRemaining() {
-	if len(m.playerRemaining) == len(m.players) {
-		return
-	}
-
-	remaining := make([]int, len(m.players))
-	for i := range remaining {
-		remaining[i] = TOTAL_PARTICLE_RESOURCES
-	}
-	m.playerRemaining = remaining
-}
-
 func (m *Model) losePlayerResources(playerNum int, amount int) {
 	if amount <= 0 {
 		return
 	}
 	idx := playerNum - 1
-	if idx < 0 || idx >= len(m.playerRemaining) {
+	if idx < 0 || idx >= len(m.players) {
 		return
 	}
-	m.playerRemaining[idx] = max(0, m.playerRemaining[idx]-amount)
+	m.players[idx].remaining = max(0, m.players[idx].remaining-amount)
 }
 
 func (m *Model) gainPlayerResources(playerNum int, amount int) {
@@ -579,10 +556,10 @@ func (m *Model) gainPlayerResources(playerNum int, amount int) {
 		return
 	}
 	idx := playerNum - 1
-	if idx < 0 || idx >= len(m.playerRemaining) {
+	if idx < 0 || idx >= len(m.players) {
 		return
 	}
-	m.playerRemaining[idx] = min(TOTAL_PARTICLE_RESOURCES, m.playerRemaining[idx]+amount)
+	m.players[idx].remaining = min(TOTAL_PARTICLE_RESOURCES, m.players[idx].remaining+amount)
 }
 
 func (m *Model) dissolveDisconnectedNear(playerNum int, contact Point) int {
@@ -1144,7 +1121,7 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 		}
 	}
 
-	if len(m.playerRemaining) > m.turn && m.playerRemaining[m.turn] <= 0 {
+	if m.turn >= 0 && m.turn < len(m.players) && m.players[m.turn].remaining <= 0 {
 		return false
 	}
 
@@ -1385,7 +1362,7 @@ func init_model(size int) Model {
 		nextGrid: nextgrid,
 		rootGrid: genIntGrid(size, ROOT_NONE),
 		nextRoot: genIntGrid(size, ROOT_NONE),
-		// walkers:  []TreeWalker{{location: vectorFromPoint(mid_point()), intensity: 100}},
+		// walkers:  []Walker{{location: vectorFromPoint(mid_point()), intensity: 100}},
 
 		players: []Player{},
 		turn:    0,
@@ -1666,7 +1643,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 			player.walkers = append(
 				player.walkers,
-				TreeWalker{
+				Walker{
 					location:  add_vectors(og.location, newVelo),
 					intensity: og.intensity / 2,
 					velocity:  newVelo,
@@ -1951,13 +1928,12 @@ func (g *LiveGame) winnerByBoard() int {
 }
 
 func (g *LiveGame) winnerByHealth() int {
-	g.model.ensurePlayerRemaining()
-	if len(g.model.playerRemaining) < 2 {
+	if len(g.model.players) < 2 {
 		return 0
 	}
 
-	red := g.model.playerRemaining[0]
-	blue := g.model.playerRemaining[1]
+	red := g.model.players[0].remaining
+	blue := g.model.players[1].remaining
 
 	if red <= 0 && blue > 0 {
 		return 2
@@ -2180,15 +2156,13 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 
 	text.Draw(screen, someText, fontFace, op)
 
-	g.model.ensurePlayerRemaining()
-
 	redRemaining := 0
 	blueRemaining := 0
-	if len(g.model.playerRemaining) > 0 {
-		redRemaining = g.model.playerRemaining[0]
+	if len(g.model.players) > 0 {
+		redRemaining = g.model.players[0].remaining
 	}
-	if len(g.model.playerRemaining) > 1 {
-		blueRemaining = g.model.playerRemaining[1]
+	if len(g.model.players) > 1 {
+		blueRemaining = g.model.players[1].remaining
 	}
 
 	redPct := float64(redRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
