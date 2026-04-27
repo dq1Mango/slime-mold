@@ -371,6 +371,7 @@ type Player struct {
 	walkers   []Walker
 	spawn     Vector
 	remaining int
+	rootID    int
 }
 
 type Model struct {
@@ -382,9 +383,9 @@ type Model struct {
 	players []Player
 	turn    int
 
-	grids           []Grid
-	size            int
-	nextRootID      int
+	grids []Grid
+	size  int
+
 	particlesInGrid int
 	freeParticles   int
 	// p        float64
@@ -398,7 +399,7 @@ type Model struct {
 func (m *Model) spawnWalker() {
 	middle := mid_point()
 	player := m.currentPlayer()
-	rootID := m.allocateRootID()
+	rootID := player.rootID
 	player.walkers = append(
 		player.walkers,
 		Walker{location: vectorFromPoint(middle), intensity: 100, rootID: rootID},
@@ -481,7 +482,7 @@ func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point) bool {
 	}
 
 	const spawnResourceBudget = 100.0
-	rootID := m.allocateRootID()
+	rootID := m.currentPlayer().rootID
 	totalWeight := 0.0
 	weights := make([]float64, len(selected))
 	for i, c := range selected {
@@ -508,7 +509,6 @@ func (m *Model) clear() {
 	m.nextGrid = gen_grid(m.size)
 	m.rootGrid = genIntGrid(m.size, ROOT_NONE)
 	m.nextRoot = genIntGrid(m.size, ROOT_NONE)
-	m.nextRootID = 0
 	m.particlesInGrid = 0
 	m.freeParticles = TOTAL_PARTICLE_RESOURCES
 
@@ -521,21 +521,26 @@ func (m *Model) clear() {
 
 func (m *Model) seedPlayersFromMap(theMap *Map) {
 	m.players = make([]Player, 2)
-	m.players[0] = Player{walkers: make([]Walker, 0), spawn: vectorFromPoint(theMap.Spawn1), remaining: TOTAL_PARTICLE_RESOURCES}
-	m.players[1] = Player{walkers: make([]Walker, 0), spawn: vectorFromPoint(theMap.Spawn2), remaining: TOTAL_PARTICLE_RESOURCES}
+	// allocate a base root id for each player's cluster
+	// use deterministic ids for two players: 0 and 1 (or keep existing mapping)
+	r0 := 0
+	r1 := 1
+	m.players[0] = Player{walkers: make([]Walker, 0), spawn: vectorFromPoint(theMap.Spawn1), remaining: TOTAL_PARTICLE_RESOURCES, rootID: r0}
+	m.players[1] = Player{walkers: make([]Walker, 0), spawn: vectorFromPoint(theMap.Spawn2), remaining: TOTAL_PARTICLE_RESOURCES, rootID: r1}
 
 	for i, player := range m.players {
 		*m.grid.vectorIndex(player.spawn) = Trail{playerNum: i + 1, value: 1}
+		// mark root ownership at the spawn
+		p := player.spawn.roundToPoint()
+		if p.X >= 0 && p.X < m.size && p.Y >= 0 && p.Y < m.size {
+			m.rootGrid[p.Y][p.X] = player.rootID
+		}
 		point := player.spawn.roundToPoint()
 		fmt.Println(*m.grid.indexCoords(point.X, point.Y))
 	}
 }
 
-func (m *Model) allocateRootID() int {
-	rootID := m.nextRootID
-	m.nextRootID++
-	return rootID
-}
+// allocateRootID removed — using per-player `rootID` values only.
 
 func (m *Model) currentPlayer() *Player {
 	return &m.players[m.turn]
