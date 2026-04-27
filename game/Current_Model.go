@@ -46,6 +46,10 @@ const (
 	ROOT_NONE  = -1
 	ROOT_MIXED = -2
 
+	// Origin clusters
+	ORIGIN_CLUSTER_RADIUS = 2
+	ORIGIN_WIN_RADIUS     = 4
+
 	// Display / timing
 	FPS         = 20.0
 	SCREEN_SIZE = 1000
@@ -74,7 +78,7 @@ const (
 	CONTROL_SPLIT_BRANCH_ANGLE = 1.0471975512
 
 	CONTACT_EROSION_RADIUS        = 5
-	CONTACT_EROSION_CENTER_DAMAGE = 5
+	CONTACT_EROSION_CENTER_DAMAGE = 20
 	CONTACT_EROSION_CENTER_PROB   = 0.50
 )
 
@@ -529,14 +533,23 @@ func (m *Model) seedPlayersFromMap(theMap *Map) {
 	m.players[1] = Player{walkers: make([]Walker, 0), spawn: vectorFromPoint(theMap.Spawn2), remaining: TOTAL_PARTICLE_RESOURCES, rootID: r1}
 
 	for i, player := range m.players {
-		*m.grid.vectorIndex(player.spawn) = Trail{playerNum: i + 1, value: 1}
-		// mark root ownership at the spawn
-		p := player.spawn.roundToPoint()
-		if p.X >= 0 && p.X < m.size && p.Y >= 0 && p.Y < m.size {
-			m.rootGrid[p.Y][p.X] = player.rootID
-		}
+		m.seedOriginCluster(player.spawn.roundToPoint(), i+1, player.rootID)
 		point := player.spawn.roundToPoint()
 		fmt.Println(*m.grid.indexCoords(point.X, point.Y))
+	}
+}
+
+func (m *Model) seedOriginCluster(center Point, playerNum int, rootID int) {
+	for y := max(0, center.Y-ORIGIN_CLUSTER_RADIUS); y <= min(m.size-1, center.Y+ORIGIN_CLUSTER_RADIUS); y++ {
+		for x := max(0, center.X-ORIGIN_CLUSTER_RADIUS); x <= min(m.size-1, center.X+ORIGIN_CLUSTER_RADIUS); x++ {
+			dx := x - center.X
+			dy := y - center.Y
+			if dx*dx+dy*dy > ORIGIN_CLUSTER_RADIUS*ORIGIN_CLUSTER_RADIUS {
+				continue
+			}
+			m.grid[y][x] = Trail{playerNum: playerNum, value: 1}
+			m.rootGrid[y][x] = rootID
+		}
 	}
 }
 
@@ -1959,12 +1972,23 @@ func (g *LiveGame) originColorOwner(playerIdx int) int {
 		return 0
 	}
 
-	owner := g.model.grid[origin.Y][origin.X].playerNum
-	if owner <= 0 {
-		// Keep original color if the origin cell is temporarily empty.
-		return playerIdx + 1
+	homeColor := playerIdx + 1
+	opponentColor := 3 - homeColor
+	for y := max(0, origin.Y-ORIGIN_WIN_RADIUS); y <= min(g.model.size-1, origin.Y+ORIGIN_WIN_RADIUS); y++ {
+		for x := max(0, origin.X-ORIGIN_WIN_RADIUS); x <= min(g.model.size-1, origin.X+ORIGIN_WIN_RADIUS); x++ {
+			dx := x - origin.X
+			dy := y - origin.Y
+			if dx*dx+dy*dy > ORIGIN_WIN_RADIUS*ORIGIN_WIN_RADIUS {
+				continue
+			}
+			owner := g.model.grid[y][x].playerNum
+			if owner == opponentColor {
+				return opponentColor
+			}
+		}
 	}
-	return owner
+
+	return homeColor
 }
 
 func teamDisplayColor(team int) color.NRGBA {
