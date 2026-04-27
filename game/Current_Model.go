@@ -75,7 +75,7 @@ const (
 
 	CONTACT_EROSION_RADIUS        = 5
 	CONTACT_EROSION_CENTER_DAMAGE = 5
-	CONTACT_EROSION_CENTER_PROB   = 0.45
+	CONTACT_EROSION_CENTER_PROB   = 0.50
 )
 
 var WEIGHT_VECTOR = Vector{x: -1, y: 1}
@@ -703,6 +703,28 @@ func (m *Model) isEdgeParticleCell(p Point) bool {
 	return false
 }
 
+func (m *Model) touchingOpponentCell(center Point, currentPlayerNum int) (Point, int, bool) {
+	if center.X >= 0 && center.X < m.size && center.Y >= 0 && center.Y < m.size {
+		owner := m.grid[center.Y][center.X].playerNum
+		if owner > 0 && owner != currentPlayerNum {
+			return center, owner, true
+		}
+	}
+
+	for _, d := range CARDINALS {
+		n := add_points(center, d)
+		if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
+			continue
+		}
+		owner := m.grid[n.Y][n.X].playerNum
+		if owner > 0 && owner != currentPlayerNum {
+			return n, owner, true
+		}
+	}
+
+	return Point{}, 0, false
+}
+
 func (m *Model) canRemoveCellSafely(p Point) bool {
 	if !m.isOccupied(p) {
 		return false
@@ -1067,47 +1089,6 @@ func (m *Model) erodeTrailAt(p Point, amount int) {
 	m.freeParticles += removed
 }
 
-func (m *Model) erodeContactZone(center Point, r *rand.Rand) {
-	yMin := max(0, center.Y-CONTACT_EROSION_RADIUS)
-	yMax := min(m.size-1, center.Y+CONTACT_EROSION_RADIUS)
-	xMin := max(0, center.X-CONTACT_EROSION_RADIUS)
-	xMax := min(m.size-1, center.X+CONTACT_EROSION_RADIUS)
-
-	for y := yMin; y <= yMax; y++ {
-		for x := xMin; x <= xMax; x++ {
-			dist := max(abs(x-center.X), abs(y-center.Y))
-			if dist > CONTACT_EROSION_RADIUS {
-				continue
-			}
-
-			p := Point{X: x, Y: y}
-			if m.grid[y][x].isEmpty() {
-				continue
-			}
-
-			if dist == 0 {
-				if r.Float64() <= CONTACT_EROSION_CENTER_PROB {
-					m.erodeTrailAt(p, CONTACT_EROSION_CENTER_DAMAGE)
-				}
-				continue
-			}
-
-			prob := 0.0
-			if dist == 1 {
-				prob = 0.12
-			}
-
-			if r.Float64() <= prob {
-				m.erodeTrailAt(p, 1)
-			}
-		}
-	}
-
-	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
-	m.freeParticles = min(maxFree, max(0, m.freeParticles))
-	m.particlesInGrid = max(0, m.particlesInGrid)
-}
-
 func (m *Model) addParticleAt(p Point, rootID int) bool {
 
 	if p.X < 0 || p.X >= m.size || p.Y < 0 || p.Y >= m.size {
@@ -1127,10 +1108,6 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 		}
 	}
 
-	if m.turn >= 0 && m.turn < len(m.players) && m.players[m.turn].remaining <= 0 {
-		return false
-	}
-
 	if m.grid.index(p).isEmpty() {
 		*m.grid.index(p) = Trail{playerNum: m.turn + 1, value: 1}
 	} else {
@@ -1138,7 +1115,6 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 	}
 	m.particlesInGrid++
 	m.freeParticles--
-	m.losePlayerResources(m.turn+1, 1)
 
 	existingOwner := m.rootGrid[p.Y][p.X]
 	if existingOwner == ROOT_NONE {
@@ -1599,6 +1575,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		player.walkers[i].velocity = newDir
 
 		quantized := player.walkers[i].location.roundToPoint()
+		contactCell, enemyPlayer, hasContact := m.touchingOpponentCell(quantized, m.turn+1)
 
 		// *m.nextGrid.index(quantized) += 1
 		// i think this is the next thing to work on
@@ -1606,14 +1583,23 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		//
 
 		trail := m.grid.index(quantized)
-		if !trail.isEmpty() && trail.playerNum != m.turn+1 {
+		if m.depositWithOverflow(quantized, newDir, walker.rootID) {
+			player.walkers[i].intensity -= 1
+		}
+		if hasContact {
+			m.erodeTrailAt(contactCell, 1)
+			if !trail.isEmpty() && trail.playerNum != m.turn+1 {
+				dissolved := m.dissolveDisconnectedNear(enemyPlayer, quantized)
+				m.gainPlayerResources(m.turn+1, dissolved)
+				m.losePlayerResources(enemyPlayer, dissolved)
+			}
+			player.walkers[i].intensity = max(0, player.walkers[i].intensity-0.5)
+		} else if !trail.isEmpty() && trail.playerNum != m.turn+1 {
 			enemyPlayer := trail.playerNum
 			dissolved := m.dissolveDisconnectedNear(enemyPlayer, quantized)
 			m.gainPlayerResources(m.turn+1, dissolved)
 			m.losePlayerResources(enemyPlayer, dissolved)
 			player.walkers[i].intensity = max(0, player.walkers[i].intensity-0.5)
-		} else if m.depositWithOverflow(quantized, newDir, walker.rootID) {
-			player.walkers[i].intensity -= 1
 		}
 
 		// conditions to reset walkers
@@ -1944,6 +1930,76 @@ func (g *LiveGame) winnerByHealth() int {
 	return 0
 }
 
+func (g *LiveGame) winnerByRootOrigin() int {
+	if len(g.model.players) < 2 || len(g.model.rootGrid) == 0 {
+		return 0
+	}
+
+	redOriginColor := g.originColorOwner(0)
+	blueOriginColor := g.originColorOwner(1)
+
+	redCaptured := redOriginColor == 2
+	blueCaptured := blueOriginColor == 1
+	if redCaptured == blueCaptured {
+		return 0
+	}
+	if blueCaptured {
+		return 1
+	}
+	return 2
+
+}
+
+func (g *LiveGame) originColorOwner(playerIdx int) int {
+	if playerIdx < 0 || playerIdx >= len(g.model.players) {
+		return 0
+	}
+	origin := g.model.players[playerIdx].spawn.roundToPoint()
+	if origin.X < 0 || origin.X >= g.model.size || origin.Y < 0 || origin.Y >= g.model.size {
+		return 0
+	}
+
+	owner := g.model.grid[origin.Y][origin.X].playerNum
+	if owner <= 0 {
+		// Keep original color if the origin cell is temporarily empty.
+		return playerIdx + 1
+	}
+	return owner
+}
+
+func teamDisplayColor(team int) color.NRGBA {
+	if team == 1 {
+		return color.NRGBA{R: 240, G: 110, B: 110, A: 255}
+	}
+	if team == 2 {
+		return color.NRGBA{R: 110, G: 170, B: 255, A: 255}
+	}
+	return color.NRGBA{R: 180, G: 180, B: 180, A: 255}
+}
+
+func (g *LiveGame) drawOriginMarkers(screen *ebiten.Image) {
+	if len(g.model.players) < 2 {
+		return
+	}
+
+	for i := 0; i < 2; i++ {
+		origin := g.model.players[i].spawn.roundToPoint()
+		if origin.X < 0 || origin.X >= g.model.size || origin.Y < 0 || origin.Y >= g.model.size {
+			continue
+		}
+
+		x := float64(origin.X) * SCALE
+		y := float64(origin.Y) * SCALE
+		outer := max(4.0, SCALE*0.8)
+		inner := max(2.0, SCALE*0.45)
+
+		// white ring to keep origin markers visible over the trail map
+		ebitenutil.DrawRect(screen, x+(SCALE-outer)/2, y+(SCALE-outer)/2, outer, outer, color.NRGBA{R: 255, G: 255, B: 255, A: 255})
+		owner := g.originColorOwner(i)
+		ebitenutil.DrawRect(screen, x+(SCALE-inner)/2, y+(SCALE-inner)/2, inner, inner, teamDisplayColor(owner))
+	}
+}
+
 func (g *LiveGame) updateGameOverState() {
 	if g.GameOver {
 		return
@@ -1952,7 +2008,10 @@ func (g *LiveGame) updateGameOverState() {
 		return
 	}
 
-	winner := g.winnerByHealth()
+	winner := g.winnerByRootOrigin()
+	if winner == 0 {
+		winner = g.winnerByHealth()
+	}
 	if winner == 0 {
 		winner = g.winnerByBoard()
 	}
@@ -2224,6 +2283,7 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 	}
 
 	copyGrid2Image(g.model.grid, screen)
+	g.drawOriginMarkers(screen)
 
 	g.DrawStats(screen)
 	// screen.WritePixels(frame.Pix)
