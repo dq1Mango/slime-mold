@@ -79,27 +79,27 @@ func defaultMap() *Map {
 			{
 				Quantity:        100,
 				ConsumptionRate: 5,
-				Position:        Point{50, 50},
+				Position:        Point{100, 100},
 			},
 			{
 				Quantity:        30,
 				ConsumptionRate: 3,
-				Position:        Point{50, 75},
+				Position:        Point{100, 150},
 			},
 			{
 				Quantity:        30,
 				ConsumptionRate: 3,
-				Position:        Point{50, 25},
+				Position:        Point{100, 50},
 			},
 			{
 				Quantity:        60,
 				ConsumptionRate: 1,
-				Position:        Point{25, 50},
+				Position:        Point{25, 100},
 			},
 			{
 				Quantity:        60,
 				ConsumptionRate: 1,
-				Position:        Point{75, 50},
+				Position:        Point{175, 100},
 			},
 		},
 
