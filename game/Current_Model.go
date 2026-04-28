@@ -762,63 +762,32 @@ func (m *Model) canRemoveCellSafely(p Point) bool {
 		return false
 	}
 
-	totalCells := m.size * m.size
+	// Temporarily remove the candidate cell and run Hoshen-Kopelman
+	old := m.grid[p.Y][p.X]
+	m.grid[p.Y][p.X] = EmptyTrail
+	_, sizes := m.hoshenKopelman(0)
+	// restore
+	m.grid[p.Y][p.X] = old
+
 	remaining := 0
-	start := Point{X: -1, Y: -1}
-	for y := range m.size {
-		for x := range m.size {
-			if x == p.X && y == p.Y {
-				continue
-			}
-			if m.grid[y][x].isEmpty() {
-				continue
-			}
-			remaining++
-			if start.X == -1 {
-				start = Point{X: x, Y: y}
-			}
-		}
+	for _, s := range sizes {
+		remaining += s
 	}
 
 	if remaining <= 1 {
 		return true
 	}
 
-	queue := []Point{start}
-	visited := make([]bool, totalCells)
-	visited[start.Y*m.size+start.X] = true
-	visitedCount := 1
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, d := range CARDINALS {
-			n := add_points(cur, d)
-			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
-				continue
-			}
-			if n.X == p.X && n.Y == p.Y {
-				continue
-			}
-			idx := n.Y*m.size + n.X
-			if m.grid[n.Y][n.X].isEmpty() || visited[idx] {
-				continue
-			}
-			visited[idx] = true
-			visitedCount++
-			queue = append(queue, n)
-		}
-	}
-
-	return visitedCount == remaining
+	// If there's only one component after removal, it's safe
+	return len(sizes) == 1
 }
 
 func (m *Model) dissolveDetachedFromAnchor(anchor Point) {
 	start := Point{X: -1, Y: -1}
 	bestDistSq := math.MaxInt
 
-	for y := range m.size {
-		for x := range m.size {
+	for y := 0; y < m.size; y++ {
+		for x := 0; x < m.size; x++ {
 			if m.grid[y][x].isEmpty() {
 				continue
 			}
@@ -836,29 +805,17 @@ func (m *Model) dissolveDetachedFromAnchor(anchor Point) {
 		return
 	}
 
-	queue := []Point{start}
-	visited := map[Point]bool{start: true}
+	// Use Hoshen-Kopelman to label all occupied components (any owner)
+	labels, _ := m.hoshenKopelman(0)
 
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, d := range CARDINALS {
-			n := add_points(cur, d)
-			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
-				continue
-			}
-			if m.grid[n.Y][n.X].isEmpty() || visited[n] {
-				continue
-			}
-			visited[n] = true
-			queue = append(queue, n)
-		}
+	startLabel := labels[start.Y][start.X]
+	if startLabel == 0 {
+		return
 	}
 
-	for y := range m.size {
-		for x := range m.size {
-			p := Point{X: x, Y: y}
-			if m.grid[y][x].isEmpty() || visited[p] {
+	for y := 0; y < m.size; y++ {
+		for x := 0; x < m.size; x++ {
+			if m.grid[y][x].isEmpty() || labels[y][x] == startLabel {
 				continue
 			}
 			removed := int(m.grid[y][x].value)
@@ -874,8 +831,8 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 	start := Point{X: -1, Y: -1}
 	bestDistSq := math.MaxInt
 
-	for y := range m.size {
-		for x := range m.size {
+	for y := 0; y < m.size; y++ {
+		for x := 0; x < m.size; x++ {
 			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 {
 				continue
 			}
@@ -893,35 +850,26 @@ func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
 		return false
 	}
 
-	queue := []Point{start}
-	connected := map[Point]bool{start: true}
+	// Temporarily remove the cut cell and label components for the current player
+	saved := m.grid[cut.Y][cut.X]
+	m.grid[cut.Y][cut.X] = EmptyTrail
+	labels, _ := m.hoshenKopelman(m.turn + 1)
+	// restore
+	m.grid[cut.Y][cut.X] = saved
 
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, d := range CARDINALS {
-			n := add_points(cur, d)
-			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
-				continue
-			}
-			if (n.X == cut.X && n.Y == cut.Y) ||
-				m.grid[n.Y][n.X].playerNum != m.turn+1 ||
-				connected[n] {
-				continue
-			}
-			connected[n] = true
-			queue = append(queue, n)
-		}
+	startLabel := labels[start.Y][start.X]
+	if startLabel == 0 {
+		return false
 	}
 
 	detachedFound := false
 	detachedBest := Point{}
 	detachedBestWeight := -1.0
 
-	for y := range m.size {
-		for x := range m.size {
+	for y := 0; y < m.size; y++ {
+		for x := 0; x < m.size; x++ {
 			p := Point{X: x, Y: y}
-			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 || connected[p] {
+			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 || labels[y][x] == startLabel {
 				continue
 			}
 			detachedFound = true
@@ -1210,6 +1158,98 @@ func genIntGrid(size int, fill int) [][]int {
 	}
 
 	return grid
+}
+
+// hoshenKopelman performs connected-component labeling on the grid.
+// If playerFilter == 0, any non-empty cell is considered; otherwise
+// only cells with playerNum == playerFilter are used.
+func (m *Model) hoshenKopelman(playerFilter int) ([][]int, map[int]int) {
+	size := m.size
+	labels := make([][]int, size)
+	for y := 0; y < size; y++ {
+		labels[y] = make([]int, size)
+	}
+
+	// parent for union-find (1-based label values)
+	maxLabels := size*size + 2
+	parent := make([]int, maxLabels)
+
+	find := func(a int) int {
+		for parent[a] != a {
+			parent[a] = parent[parent[a]]
+			a = parent[a]
+		}
+		return a
+	}
+	union := func(a, b int) {
+		ra := find(a)
+		rb := find(b)
+		if ra == 0 || rb == 0 || ra == rb {
+			return
+		}
+		parent[rb] = ra
+	}
+
+	nextLabel := 1
+
+	// First pass: assign provisional labels and union equivalent labels
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			cell := m.grid[y][x]
+			occupied := !cell.isEmpty() && (playerFilter == 0 || cell.playerNum == playerFilter)
+			if !occupied {
+				continue
+			}
+
+			leftLabel := 0
+			upLabel := 0
+			if x > 0 {
+				leftLabel = labels[y][x-1]
+			}
+			if y > 0 {
+				upLabel = labels[y-1][x]
+			}
+
+			if leftLabel == 0 && upLabel == 0 {
+				labels[y][x] = nextLabel
+				parent[nextLabel] = nextLabel
+				nextLabel++
+			} else if leftLabel != 0 && upLabel == 0 {
+				labels[y][x] = leftLabel
+			} else if leftLabel == 0 && upLabel != 0 {
+				labels[y][x] = upLabel
+			} else {
+				labels[y][x] = leftLabel
+				if leftLabel != upLabel {
+					union(leftLabel, upLabel)
+				}
+			}
+		}
+	}
+
+	// Second pass: flatten labels and compute sizes
+	compRootToID := make(map[int]int)
+	sizes := make(map[int]int)
+	nextID := 1
+	for y := 0; y < size; y++ {
+		for x := 0; x < size; x++ {
+			l := labels[y][x]
+			if l == 0 {
+				continue
+			}
+			root := find(l)
+			id, ok := compRootToID[root]
+			if !ok {
+				id = nextID
+				compRootToID[root] = id
+				nextID++
+			}
+			labels[y][x] = id
+			sizes[id]++
+		}
+	}
+
+	return labels, sizes
 }
 
 // func heart_equation_derive(x, y float64) float64 {
@@ -2287,8 +2327,6 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	bg := color.NRGBA{R: 34, G: 34, B: 34, A: 220}
 	red := color.NRGBA{R: 220, G: 70, B: 70, A: 240}
 	blue := color.NRGBA{R: 70, G: 130, B: 240, A: 240}
-	labelRed := color.NRGBA{R: 245, G: 160, B: 160, A: 255}
-	labelBlue := color.NRGBA{R: 160, G: 195, B: 255, A: 255}
 
 	leftX := pad
 	rightX := pad + barW + gap
@@ -2298,17 +2336,25 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 	ebitenutil.DrawRect(screen, leftX, barTop, barW*redPct, barH, red)
 	ebitenutil.DrawRect(screen, rightX, barTop, barW*bluePct, barH, blue)
 
-	redText := fmt.Sprintf("Red %d", redRemaining)
-	blueText := fmt.Sprintf("Blue %d", blueRemaining)
+	redText := fmt.Sprintf("%d", redRemaining)
+	blueText := fmt.Sprintf("%d", blueRemaining)
 
+	// draw the numeric resource counts centered inside each health bar
+	rw, rh := text.Measure(redText, fontFace, 0)
+	bw, bh := text.Measure(blueText, fontFace, 0)
+
+	redTextX := leftX + (barW-rw)/2
+	redTextY := barTop + (barH-rh)/2
 	redOp := &text.DrawOptions{}
-	redOp.GeoM.Translate(leftX, barTop+24)
-	redOp.ColorScale.ScaleWithColor(labelRed)
+	redOp.GeoM.Translate(redTextX, redTextY)
+	redOp.ColorScale.ScaleWithColor(color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	text.Draw(screen, redText, fontFace, redOp)
 
+	blueTextX := rightX + (barW-bw)/2
+	blueTextY := barTop + (barH-bh)/2
 	blueOp := &text.DrawOptions{}
-	blueOp.GeoM.Translate(rightX, barTop+24)
-	blueOp.ColorScale.ScaleWithColor(labelBlue)
+	blueOp.GeoM.Translate(blueTextX, blueTextY)
+	blueOp.ColorScale.ScaleWithColor(color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	text.Draw(screen, blueText, fontFace, blueOp)
 
 	const DIVIDER_HEIGHT = 5
