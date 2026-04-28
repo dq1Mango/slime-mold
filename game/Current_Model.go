@@ -151,6 +151,18 @@ var CARDINALS = []Point{
 	{X: 0, Y: -1},
 }
 
+// idk what to call this
+var OCTOGALS = []Point{
+	{X: 1, Y: 0},
+	{X: 1, Y: 1},
+	{X: 0, Y: 1},
+	{X: -1, Y: 1},
+	{X: -1, Y: 0},
+	{X: -1, Y: -1},
+	{X: 0, Y: -1},
+	{X: 1, Y: -1},
+}
+
 type Vector struct {
 	x float64
 	y float64
@@ -386,6 +398,9 @@ type Model struct {
 	nextGrid Grid
 	rootGrid [][]int
 	nextRoot [][]int
+
+	// i couldnt understand the root grid so i made my own
+	icutrgsimmo [][]int
 
 	players []Player
 	turn    int
@@ -690,6 +705,50 @@ func (m *Model) cullWeakWalkers() {
 		}
 	}
 	player.walkers = alive
+}
+
+func (m *Model) labelCluster(point Point, label int) {
+
+	// should i have had an 'index()' method for this... probably
+	m.icutrgsimmo[point.Y][point.X] = label
+
+	for _, bird := range OCTOGALS {
+		newPoint := add_points(point, bird)
+		if m.grid.index(newPoint).playerNum == label && m.icutrgsimmo[newPoint.Y][newPoint.X] == 0 {
+			m.labelCluster(newPoint, label)
+		}
+	}
+}
+
+func (m *Model) countClusters() {
+	// clear all labellings
+	for i := range m.icutrgsimmo {
+		for j := range m.icutrgsimmo {
+			m.icutrgsimmo[i][j] = 0
+		}
+	}
+
+	for id, player := range m.players {
+		m.labelCluster(player.spawn.roundToPoint(), id+1)
+	}
+}
+
+func (m *Model) purgeCutBranches() {
+	start := time.Now()
+
+	m.countClusters()
+
+	elapsed := time.Since(start)
+	fmt.Println("cluster counting took:", elapsed)
+
+	for i := range m.grid {
+		for j := range m.grid {
+			if m.icutrgsimmo[i][j] == 0 {
+				m.grid[i][j] = EmptyTrail
+			}
+		}
+	}
+
 }
 
 func directionStep(v Vector) Point {
@@ -1410,6 +1469,8 @@ func init_model(size int) Model {
 		nextGrid: nextgrid,
 		rootGrid: genIntGrid(size, ROOT_NONE),
 		nextRoot: genIntGrid(size, ROOT_NONE),
+
+		icutrgsimmo: genIntGrid(size, 0),
 		// walkers:  []Walker{{location: vectorFromPoint(mid_point()), intensity: 100}},
 
 		players: []Player{},
@@ -1581,6 +1642,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 	player := m.currentPlayer()
 
 	alive := false
+	collision := false
 
 	for i, walker := range player.walkers {
 		if walker.intensity < MIN_WALKER_INTENSITY {
@@ -1647,7 +1709,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		player.walkers[i].velocity = newDir
 
 		quantized := player.walkers[i].location.roundToPoint()
-		contactCell, enemyPlayer, hasContact := m.touchingOpponentCell(quantized, m.turn+1)
+		// contactCell, enemyPlayer, hasContact := m.touchingOpponentCell(quantized, m.turn+1)
 
 		// *m.nextGrid.index(quantized) += 1
 		// i think this is the next thing to work on
@@ -1655,24 +1717,49 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		//
 
 		trail := m.grid.index(quantized)
-		if m.depositWithOverflow(quantized, newDir, walker.rootID) {
+
+		// i thought that reverting to the old way might fix a lil bug, but i dont think it did
+		if !trail.isEmpty() && trail.playerNum != m.turn+1 {
+			fmt.Println("detected adversary")
+			collision = true
+			// hah get it?
+			INTensity := int(walker.intensity)
+			if trail.value > INTensity {
+				trail.value -= INTensity
+				walker.intensity = 0
+
+			} else if trail.value < INTensity {
+				*trail = Trail{playerNum: m.turn + 1, value: 1}
+			} else {
+
+				*trail = EmptyTrail
+			}
+		} else if m.depositWithOverflow(quantized, newDir, walker.rootID) {
 			player.walkers[i].intensity -= 1
 		}
-		if hasContact {
-			m.erodeTrailAt(contactCell, 1)
-			if !trail.isEmpty() && trail.playerNum != m.turn+1 {
-				dissolved := m.dissolveDisconnectedNear(enemyPlayer, quantized)
-				m.gainPlayerResources(m.turn+1, dissolved)
-				m.losePlayerResources(enemyPlayer, dissolved)
-			}
-			player.walkers[i].intensity = max(0, player.walkers[i].intensity-0.5)
-		} else if !trail.isEmpty() && trail.playerNum != m.turn+1 {
-			enemyPlayer := trail.playerNum
-			dissolved := m.dissolveDisconnectedNear(enemyPlayer, quantized)
-			m.gainPlayerResources(m.turn+1, dissolved)
-			m.losePlayerResources(enemyPlayer, dissolved)
-			player.walkers[i].intensity = max(0, player.walkers[i].intensity-0.5)
-		}
+		// if m.depositWithOverflow(quantized, newDir, walker.rootID) {
+		// 	player.walkers[i].intensity -= 1
+		// }
+		// if hasContact {
+		// 	collision = true
+		//
+		// 	m.erodeTrailAt(contactCell, 1)
+		// 	if !trail.isEmpty() && trail.playerNum != m.turn+1 {
+		// 		// dissolved := m.dissolveDisconnectedNear(enemyPlayer, quantized)
+		// 		m.gainPlayerResources(m.turn+1, m.turn)
+		// 		m.losePlayerResources(enemyPlayer, trail.playerNum)
+		// 	} else {
+		// 		panic("these conditionals r useless")
+		// 	}
+		// 	player.walkers[i].intensity = max(0, player.walkers[i].intensity-0.5)
+		// } else if !trail.isEmpty() && trail.playerNum != m.turn+1 {
+		// 	panic("this should never happen right?")
+		// 	// enemyPlayer := trail.playerNum
+		// 	// dissolved := m.dissolveDisconnectedNear(enemyPlayer, quantized)
+		// 	// m.gainPlayerResources(m.turn+1, dissolved)
+		// 	// m.losePlayerResources(enemyPlayer, dissolved)
+		// 	// player.walkers[i].intensity = max(0, player.walkers[i].intensity-0.5)
+		// }
 
 		// conditions to reset walkers
 		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
@@ -1724,6 +1811,12 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 	}
 
 	m.cullWeakWalkers()
+
+	// only purge branches if there is a collision
+	// TVA core ^^^
+	if collision {
+		m.purgeCutBranches()
+	}
 
 	return !alive
 
@@ -2221,6 +2314,19 @@ func (g *LiveGame) Update() error {
 			fmt.Println("stopped moving")
 			g.Moving = false
 			g.toggleTurn()
+
+			// g.model.purgeCutBranches()
+
+			// roots := make([]int, 10)
+			// for _, row := range g.model.rootGrid {
+			// 	for _, value := range row {
+			// 		if value >= 0 {
+			// 			roots[value]++
+			//
+			// 		}
+			// 	}
+			// }
+			// fmt.Println(roots)
 			// g.reset()
 			break
 		}
