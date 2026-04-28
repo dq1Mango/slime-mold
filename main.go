@@ -79,12 +79,12 @@ var StateColor = map[SiteState]color.NRGBA{
 	Origin: {
 		R: 0,
 		G: 0,
-		B: 255,
+		B: 0,
 		A: 255,
 	},
 	Active: {
 		R: 0,
-		G: 255,
+		G: 0,
 		B: 0,
 		A: 255,
 	},

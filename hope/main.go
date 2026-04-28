@@ -21,6 +21,7 @@ import (
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
 	"github.com/montanaflynn/stats"
+
 	// "golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
 	// "slices"
@@ -95,12 +96,12 @@ var StateColor = map[SiteState]color.NRGBA{
 	Origin: {
 		R: 0,
 		G: 0,
-		B: 255,
+		B: 0,
 		A: 255,
 	},
 	Active: {
 		R: 0,
-		G: 255,
+		G: 0,
 		B: 0,
 		A: 255,
 	},

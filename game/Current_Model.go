@@ -114,15 +114,16 @@ var StateColor = map[SiteState]color.NRGBA{
 		B: 0,
 		A: 255,
 	},
+	// Do not apply special coloring for origin/active sites; keep neutral
 	Origin: {
 		R: 0,
 		G: 0,
-		B: 255,
+		B: 0,
 		A: 255,
 	},
 	Active: {
 		R: 0,
-		G: 255,
+		G: 0,
 		B: 0,
 		A: 255,
 	},
@@ -2033,26 +2034,17 @@ func (g *LiveGame) drawOriginMarkers(screen *ebiten.Image) {
 		x := float64(origin.X) * SCALE
 		y := float64(origin.Y) * SCALE
 		outer := max(4.0, SCALE*0.8)
-		inner := max(2.0, SCALE*0.45)
 
-		// white ring to keep origin markers visible over the trail map
+		// origin marker: keep neutral (black) over the trail map
 		ebitenutil.DrawRect(
 			screen,
 			x+(SCALE-outer)/2,
 			y+(SCALE-outer)/2,
 			outer,
 			outer,
-			color.NRGBA{R: 255, G: 255, B: 255, A: 255},
+			color.NRGBA{R: 0, G: 0, B: 0, A: 255},
 		)
-		owner := g.originColorOwner(i)
-		ebitenutil.DrawRect(
-			screen,
-			x+(SCALE-inner)/2,
-			y+(SCALE-inner)/2,
-			inner,
-			inner,
-			teamDisplayColor(owner),
-		)
+		// do not draw colored inner marker; keep origin marker neutral
 	}
 }
 
