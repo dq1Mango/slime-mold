@@ -553,16 +553,18 @@ func (m *Model) seedPlayersFromMap(theMap *Map) {
 	r0 := 0
 	r1 := 1
 	m.players[0] = Player{
-		walkers:   make([]Walker, 0),
-		spawn:     vectorFromPoint(theMap.Spawn1),
-		remaining: TOTAL_PARTICLE_RESOURCES,
-		rootID:    r0,
+		walkers:         make([]Walker, 0),
+		spawn:           vectorFromPoint(theMap.Spawn1),
+		remaining:       TOTAL_PARTICLE_RESOURCES,
+		placedParticles: 0,
+		rootID:          r0,
 	}
 	m.players[1] = Player{
-		walkers:   make([]Walker, 0),
-		spawn:     vectorFromPoint(theMap.Spawn2),
-		remaining: TOTAL_PARTICLE_RESOURCES,
-		rootID:    r1,
+		walkers:         make([]Walker, 0),
+		spawn:           vectorFromPoint(theMap.Spawn2),
+		remaining:       TOTAL_PARTICLE_RESOURCES,
+		placedParticles: 0,
+		rootID:          r1,
 	}
 
 	for i, player := range m.players {
@@ -1661,12 +1663,15 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 	alive := false
 	collision := false
 
+	iters := 0
+
 	for i, walker := range player.walkers {
 		if walker.intensity < MIN_WALKER_INTENSITY {
 			player.walkers[i].intensity = 0
 			continue
 		}
 
+		iters++
 		alive = true
 
 		// var new_vec Vector
@@ -1748,7 +1753,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 			walker.intensity -= float64(destruction)
 			trail.value -= destruction
-			m.players[m.turn].remaining -= destruction
+			// m.players[m.turn].remaining -= destruction
 
 			if trail.value < 1 {
 				*trail = EmptyTrail
@@ -1933,6 +1938,7 @@ func newLiveGame(p float64, distance int) *LiveGame {
 
 func (g *LiveGame) reset() {
 	g.model = init_model(GRID_SIZE)
+	g.theMap = defaultMap()
 	g.model.seedPlayersFromMap(g.theMap)
 	g.model.turn = 0
 	g.GameOver = false
@@ -2098,11 +2104,23 @@ func (g *LiveGame) updateGameOverState() {
 	}
 
 	winner := g.winnerByRootOrigin()
+	if winner != 0 {
+		fmt.Println("root origin")
+	}
 	if winner == 0 {
 		winner = g.winnerByHealth()
+
+		if winner != 0 {
+			fmt.Println("won by health")
+
+		}
 	}
 	if winner == 0 {
 		winner = g.winnerByBoard()
+		if winner != 0 {
+			fmt.Println("won by board")
+		}
+
 	}
 	if winner == 0 {
 		return
@@ -2148,7 +2166,7 @@ func (g *LiveGame) step() bool {
 
 	g.model.time++
 
-	return end || g.model.time >= 1000
+	return end
 }
 
 func mouseWeightVector(cursorX, cursorY, width, height int) Vector {
@@ -2198,7 +2216,7 @@ func (g *LiveGame) Update() error {
 			}
 
 			resources := g.calcResourcesPerTurn()
-			fmt.Println(resources)
+			// fmt.Println(resources)
 
 			if !g.model.spawnWalkerAtNearestPlacedParticle(LIVE_MOUSE_POINT, resources) {
 				g.model.spawnWalker(resources)
@@ -2433,6 +2451,8 @@ const OAT_MIN_SCALE = 0.05
 const OAT_MAX_QUANTITY = 1000.0
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
+	ebitenutil.DebugPrint(screen, "stop finding so many bugs >:(")
+
 	copyGrid2Image(g.model.grid, screen)
 
 	// this should be made a bg image istead of making it every frame
