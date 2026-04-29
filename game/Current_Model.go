@@ -743,6 +743,9 @@ func (m *Model) purgeCutBranches() {
 	for i := range m.grid {
 		for j := range m.grid {
 			if m.icutrgsimmo[i][j] == 0 {
+				if trail := m.grid[i][j]; trail.playerNum > 0 {
+					m.players[trail.playerNum-1].placedParticles -= trail.value
+				}
 				m.grid[i][j] = EmptyTrail
 			}
 		}
@@ -894,6 +897,9 @@ func (g *LiveGame) calcResourcesPerTurn() float64 {
 	resources := RESOURCE_REGEN_PER_TURN
 
 	for i, food := range g.theMap.Foods {
+		if food.Quantity <= 0 {
+			continue
+		}
 		if g.model.grid.index(food.Position).playerNum == g.currentTurn() {
 
 			resources += food.ConsumptionRate
@@ -1156,7 +1162,7 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 		return false
 	}
 	if !m.grid[p.Y][p.X].isEmpty() && m.grid[p.Y][p.X].value >= MAX_CELL_PARTICLES {
-		fmt.Println("too many particles")
+		// fmt.Println("too many particles")
 		return false
 	}
 
@@ -1411,31 +1417,6 @@ func (g *Grid) is_valid_point(point Point) bool {
 	// } else {
 	// 	return false
 	// }
-}
-
-func clear_screen() {
-	print("\u001b[2J")
-}
-
-func clear_line() {
-	print("\u001b[2K")
-	print("\r")
-}
-
-func random_step(r *rand.Rand) Point {
-
-	value := r.Float64()
-
-	if value < 0.25 {
-		return Point{X: 1, Y: 0}
-	} else if value < 0.5 {
-		return Point{X: -1, Y: 0}
-	} else if value < 0.75 {
-		return Point{X: 0, Y: 1}
-	} else {
-		return Point{X: 0, Y: -1}
-	}
-
 }
 
 func randomUnitVector(r *rand.Rand) Vector {
@@ -1821,8 +1802,9 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 		// conditions to reset walkers
 		// if m.onPerimeter(quantized) || distance(m.walkers[i].location, LIVE_MOUSE_TARGET) < 2 {
-		if m.onPerimeter(quantized) ||
-			distance(player.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
+		if m.onPerimeter(quantized) {
+			// ||
+			// distance(player.walkers[i].location, vectorFromPoint(LIVE_MOUSE_POINT)) < 2 {
 			// m.walkers = slices.Delete(m.walkers, i, i+1)
 			player.walkers[i].intensity = 0
 			continue
@@ -2455,6 +2437,10 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 
 	// this should be made a bg image istead of making it every frame
 	for _, food := range g.theMap.Foods {
+		if food.Quantity <= 0 {
+			continue
+		}
+
 		size := float64(OatImage.Bounds().Size().X)
 
 		oatScale := OAT_MIN_SCALE + (OAT_MAX_SCALE-OAT_MIN_SCALE)/OAT_MAX_QUANTITY*float64(
