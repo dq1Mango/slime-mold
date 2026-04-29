@@ -3,7 +3,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 
 	_ "embed"
@@ -13,14 +12,12 @@ import (
 	"math"
 	"math/rand"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/hajimehoshi/ebiten/v2"
 	"github.com/hajimehoshi/ebiten/v2/ebitenutil"
 	"github.com/hajimehoshi/ebiten/v2/inpututil"
 	"github.com/hajimehoshi/ebiten/v2/text/v2"
-	"github.com/montanaflynn/stats"
 
 	"golang.org/x/image/font/basicfont"
 )
@@ -57,6 +54,8 @@ const (
 )
 
 const (
+	RESOURCE_REGEN_PER_TURN = 100.0
+
 	HIGH_FLOW_THRESHOLD         = 4
 	RESOURCE_PRESSURE_THRESHOLD = 2
 	RESOURCE_REFILL_BATCH       = 8
@@ -129,12 +128,7 @@ var StateColor = map[SiteState]color.NRGBA{
 	},
 }
 
-// ffdsf go:embed NotoSans-Regular.ttf
-// var arabicTTF []byte
-
 var fontFace text.Face = text.NewGoXFace(basicfont.Face7x13)
-
-// var arabicFaceSource *text.GoTextFaceSource
 
 type Grid [][]Trail
 
@@ -390,7 +384,11 @@ type Player struct {
 	walkers   []Walker
 	spawn     Vector
 	remaining int
-	rootID    int
+
+	availibleParticles int
+	placedParticles    int
+
+	rootID int
 }
 
 type Model struct {
@@ -408,8 +406,8 @@ type Model struct {
 	grids []Grid
 	size  int
 
-	particlesInGrid int
-	freeParticles   int
+	// particlesInGrid int
+	// freeParticles   int
 	// p        float64
 	// people   int
 	// infected int
@@ -418,19 +416,19 @@ type Model struct {
 	// distance int
 }
 
-func (m *Model) spawnWalker() {
+func (m *Model) spawnWalker(resources float64) {
 	middle := mid_point()
 	player := m.currentPlayer()
 	rootID := player.rootID
 	player.walkers = append(
 		player.walkers,
-		Walker{location: vectorFromPoint(middle), intensity: 100, rootID: rootID},
+		Walker{location: vectorFromPoint(middle), intensity: resources, rootID: rootID},
 	)
 }
 
 // This spawns walkers on all existing trail points near target (usually the mouse).
 // The selected region is the closest radial distance plus a small outward buffer.
-func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point) bool {
+func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point, spawnResources float64) bool {
 	if len(m.grid) == 0 {
 		return false
 	}
@@ -503,7 +501,6 @@ func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point) bool {
 		selected = selected[:maxSelectedPoints]
 	}
 
-	const spawnResourceBudget = 100.0
 	rootID := m.currentPlayer().rootID
 	totalWeight := 0.0
 	weights := make([]float64, len(selected))
@@ -516,7 +513,7 @@ func (m *Model) spawnWalkerAtNearestPlacedParticle(target Point) bool {
 	player := m.currentPlayer()
 
 	for i, c := range selected {
-		intensity := spawnResourceBudget * (weights[i] / totalWeight)
+		intensity := spawnResources * (weights[i] / totalWeight)
 		player.walkers = append(
 			player.walkers,
 			Walker{location: vectorFromPoint(c.point), intensity: intensity, rootID: rootID},
@@ -537,12 +534,14 @@ func (m *Model) clear() {
 	m.nextGrid = gen_grid(m.size)
 	m.rootGrid = genIntGrid(m.size, ROOT_NONE)
 	m.nextRoot = genIntGrid(m.size, ROOT_NONE)
-	m.particlesInGrid = 0
-	m.freeParticles = TOTAL_PARTICLE_RESOURCES
+	// m.particlesInGrid = 0
+	// m.freeParticles = TOTAL_PARTICLE_RESOURCES
 
 	for i := range m.players {
 		m.players[i].walkers = []Walker{}
 		m.players[i].remaining = TOTAL_PARTICLE_RESOURCES
+		m.players[i].availibleParticles = TOTAL_PARTICLE_RESOURCES
+		m.players[i].placedParticles = 0
 
 	}
 }
@@ -615,84 +614,84 @@ func (m *Model) gainPlayerResources(playerNum int, amount int) {
 	m.players[idx].remaining = min(TOTAL_PARTICLE_RESOURCES, m.players[idx].remaining+amount)
 }
 
-func (m *Model) dissolveDisconnectedNear(playerNum int, contact Point) int {
-	if playerNum <= 0 || playerNum > len(m.players) {
-		return 0
-	}
-
-	anchor := m.players[playerNum-1].spawn.roundToPoint()
-	if anchor.X < 0 || anchor.X >= m.size || anchor.Y < 0 || anchor.Y >= m.size {
-		return 0
-	}
-	if m.grid[anchor.Y][anchor.X].playerNum != playerNum {
-		// If the origin is not occupied by this player, do not dissolve everything.
-		return 0
-	}
-
-	connected := make(map[Point]bool)
-	queue := []Point{anchor}
-	connected[anchor] = true
-
-	for len(queue) > 0 {
-		cur := queue[0]
-		queue = queue[1:]
-		for _, d := range CARDINALS {
-			n := add_points(cur, d)
-			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
-				continue
-			}
-			if connected[n] || m.grid[n.Y][n.X].playerNum != playerNum {
-				continue
-			}
-			connected[n] = true
-			queue = append(queue, n)
-		}
-	}
-
-	best := Point{X: -1, Y: -1}
-	bestValue := math.MaxInt
-	bestDistSq := math.MaxInt
-	for y := 0; y < m.size; y++ {
-		for x := 0; x < m.size; x++ {
-			if m.grid[y][x].playerNum != playerNum {
-				continue
-			}
-			p := Point{X: x, Y: y}
-			if connected[p] {
-				continue
-			}
-
-			value := m.grid[y][x].value
-			dx := x - contact.X
-			dy := y - contact.Y
-			distSq := dx*dx + dy*dy
-
-			if value < bestValue || (value == bestValue && distSq < bestDistSq) {
-				best = p
-				bestValue = value
-				bestDistSq = distSq
-			}
-		}
-	}
-
-	dissolved := 0
-	if best.X != -1 {
-		m.grid[best.Y][best.X].value--
-		dissolved = 1
-		if m.grid[best.Y][best.X].value <= 0 {
-			m.grid[best.Y][best.X] = EmptyTrail
-			m.rootGrid[best.Y][best.X] = ROOT_NONE
-		}
-		m.particlesInGrid--
-		m.freeParticles++
-	}
-
-	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
-	m.freeParticles = min(maxFree, max(0, m.freeParticles))
-	m.particlesInGrid = max(0, m.particlesInGrid)
-
-	return dissolved
-}
+// func (m *Model) dissolveDisconnectedNear(playerNum int, contact Point) int {
+// 	if playerNum <= 0 || playerNum > len(m.players) {
+// 		return 0
+// 	}
+//
+// 	anchor := m.players[playerNum-1].spawn.roundToPoint()
+// 	if anchor.X < 0 || anchor.X >= m.size || anchor.Y < 0 || anchor.Y >= m.size {
+// 		return 0
+// 	}
+// 	if m.grid[anchor.Y][anchor.X].playerNum != playerNum {
+// 		// If the origin is not occupied by this player, do not dissolve everything.
+// 		return 0
+// 	}
+//
+// 	connected := make(map[Point]bool)
+// 	queue := []Point{anchor}
+// 	connected[anchor] = true
+//
+// 	for len(queue) > 0 {
+// 		cur := queue[0]
+// 		queue = queue[1:]
+// 		for _, d := range CARDINALS {
+// 			n := add_points(cur, d)
+// 			if n.X < 0 || n.X >= m.size || n.Y < 0 || n.Y >= m.size {
+// 				continue
+// 			}
+// 			if connected[n] || m.grid[n.Y][n.X].playerNum != playerNum {
+// 				continue
+// 			}
+// 			connected[n] = true
+// 			queue = append(queue, n)
+// 		}
+// 	}
+//
+// 	best := Point{X: -1, Y: -1}
+// 	bestValue := math.MaxInt
+// 	bestDistSq := math.MaxInt
+// 	for y := 0; y < m.size; y++ {
+// 		for x := 0; x < m.size; x++ {
+// 			if m.grid[y][x].playerNum != playerNum {
+// 				continue
+// 			}
+// 			p := Point{X: x, Y: y}
+// 			if connected[p] {
+// 				continue
+// 			}
+//
+// 			value := m.grid[y][x].value
+// 			dx := x - contact.X
+// 			dy := y - contact.Y
+// 			distSq := dx*dx + dy*dy
+//
+// 			if value < bestValue || (value == bestValue && distSq < bestDistSq) {
+// 				best = p
+// 				bestValue = value
+// 				bestDistSq = distSq
+// 			}
+// 		}
+// 	}
+//
+// 	dissolved := 0
+// 	if best.X != -1 {
+// 		m.grid[best.Y][best.X].value--
+// 		dissolved = 1
+// 		if m.grid[best.Y][best.X].value <= 0 {
+// 			m.grid[best.Y][best.X] = EmptyTrail
+// 			m.rootGrid[best.Y][best.X] = ROOT_NONE
+// 		}
+// 		m.particlesInGrid--
+// 		m.freeParticles++
+// 	}
+//
+// 	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
+// 	m.freeParticles = min(maxFree, max(0, m.freeParticles))
+// 	m.particlesInGrid = max(0, m.particlesInGrid)
+//
+// 	return dissolved
+// }
 
 func (m *Model) cullWeakWalkers() {
 
@@ -877,132 +876,154 @@ func (m *Model) dissolveDetachedFromAnchor(anchor Point) {
 			if m.grid[y][x].isEmpty() || labels[y][x] == startLabel {
 				continue
 			}
-			removed := int(m.grid[y][x].value)
-			m.particlesInGrid -= removed
-			m.freeParticles += removed
+
+			// make sure to uncomment this stuff if this fuinction ends up getting used
+			// removed := int(m.grid[y][x].value)
+
+			//
+			// m.particlesInGrid -= removed
+			// m.freeParticles += removed
 			m.grid[y][x] = EmptyTrail
 			m.rootGrid[y][x] = ROOT_NONE
 		}
 	}
 }
 
-func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
-	start := Point{X: -1, Y: -1}
-	bestDistSq := math.MaxInt
+func (g *LiveGame) calcResourcesPerTurn() float64 {
 
-	for y := 0; y < m.size; y++ {
-		for x := 0; x < m.size; x++ {
-			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 {
-				continue
-			}
-			dx := x - anchor.X
-			dy := y - anchor.Y
-			distSq := dx*dx + dy*dy
-			if distSq < bestDistSq {
-				bestDistSq = distSq
-				start = Point{X: x, Y: y}
-			}
+	resources := RESOURCE_REGEN_PER_TURN
+
+	for i, food := range g.theMap.Foods {
+		if g.model.grid.index(food.Position).playerNum == g.currentTurn() {
+
+			resources += food.ConsumptionRate
+			g.theMap.Foods[i].Quantity -= food.ConsumptionRate
+
 		}
 	}
 
-	if start.X == -1 {
-		return false
-	}
-
-	// Temporarily remove the cut cell and label components for the current player
-	saved := m.grid[cut.Y][cut.X]
-	m.grid[cut.Y][cut.X] = EmptyTrail
-	labels, _ := m.hoshenKopelman(m.turn + 1)
-	// restore
-	m.grid[cut.Y][cut.X] = saved
-
-	startLabel := labels[start.Y][start.X]
-	if startLabel == 0 {
-		return false
-	}
-
-	detachedFound := false
-	detachedBest := Point{}
-	detachedBestWeight := -1.0
-
-	for y := 0; y < m.size; y++ {
-		for x := 0; x < m.size; x++ {
-			p := Point{X: x, Y: y}
-			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 || labels[y][x] == startLabel {
-				continue
-			}
-			detachedFound = true
-
-			level := m.grid[y][x].value
-			weight := 1.0 / float64(level)
-			if level >= HIGH_FLOW_THRESHOLD {
-				weight *= 0.35
-			}
-			if weight > detachedBestWeight {
-				detachedBestWeight = weight
-				detachedBest = p
-			}
-		}
-	}
-
-	if !detachedFound {
-		return false
-	}
-
-	m.grid[detachedBest.Y][detachedBest.X].value -= 1
-	if m.grid[detachedBest.Y][detachedBest.X].value <= 0 {
-		m.grid[detachedBest.Y][detachedBest.X] = EmptyTrail
-		m.rootGrid[detachedBest.Y][detachedBest.X] = ROOT_NONE
-	}
-	m.particlesInGrid--
-	m.freeParticles++
-	return true
+	return resources
 }
 
-func (m *Model) refillFreeParticles(anchor Point) bool {
-	if m.freeParticles > 0 {
-		return true
-	}
+// func (m *Model) reclaimFromWouldBeDisconnected(anchor, cut Point) bool {
+// 	start := Point{X: -1, Y: -1}
+// 	bestDistSq := math.MaxInt
+//
+// 	for y := 0; y < m.size; y++ {
+// 		for x := 0; x < m.size; x++ {
+// 			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 {
+// 				continue
+// 			}
+// 			dx := x - anchor.X
+// 			dy := y - anchor.Y
+// 			distSq := dx*dx + dy*dy
+// 			if distSq < bestDistSq {
+// 				bestDistSq = distSq
+// 				start = Point{X: x, Y: y}
+// 			}
+// 		}
+// 	}
+//
+// 	if start.X == -1 {
+// 		return false
+// 	}
+//
+// 	// Temporarily remove the cut cell and label components for the current player
+// 	saved := m.grid[cut.Y][cut.X]
+// 	m.grid[cut.Y][cut.X] = EmptyTrail
+// 	labels, _ := m.hoshenKopelman(m.turn + 1)
+// 	// restore
+// 	m.grid[cut.Y][cut.X] = saved
+//
+// 	startLabel := labels[start.Y][start.X]
+// 	if startLabel == 0 {
+// 		return false
+// 	}
+//
+// 	detachedFound := false
+// 	detachedBest := Point{}
+// 	detachedBestWeight := -1.0
+//
+// 	for y := 0; y < m.size; y++ {
+// 		for x := 0; x < m.size; x++ {
+// 			p := Point{X: x, Y: y}
+// 			if (x == cut.X && y == cut.Y) || m.grid[y][x].playerNum != m.turn+1 || labels[y][x] == startLabel {
+// 				continue
+// 			}
+// 			detachedFound = true
+//
+// 			level := m.grid[y][x].value
+// 			weight := 1.0 / float64(level)
+// 			if level >= HIGH_FLOW_THRESHOLD {
+// 				weight *= 0.35
+// 			}
+// 			if weight > detachedBestWeight {
+// 				detachedBestWeight = weight
+// 				detachedBest = p
+// 			}
+// 		}
+// 	}
+//
+// 	if !detachedFound {
+// 		return false
+// 	}
+//
+// 	m.grid[detachedBest.Y][detachedBest.X].value -= 1
+// 	if m.grid[detachedBest.Y][detachedBest.X].value <= 0 {
+// 		m.grid[detachedBest.Y][detachedBest.X] = EmptyTrail
+// 		m.rootGrid[detachedBest.Y][detachedBest.X] = ROOT_NONE
+// 	}
+// 	m.particlesInGrid--
+// 	m.freeParticles++
+// 	return true
+// }
 
-	for range RESOURCE_REFILL_BATCH {
-		if !m.reclaimOneParticle(anchor) {
-			break
-		}
-		if m.freeParticles > 0 {
-			return true
-		}
-	}
+// func (m *Model) refillFreeParticles(anchor Point) bool {
+// 	if m.freeParticles > 0 {
+// 		return true
+// 	}
+//
+// 	for range RESOURCE_REFILL_BATCH {
+// 		if !m.reclaimOneParticle(anchor) {
+// 			break
+// 		}
+// 		if m.freeParticles > 0 {
+// 			return true
+// 		}
+// 	}
+//
+// 	return m.freeParticles > 0
+// }
 
-	return m.freeParticles > 0
-}
-
-func (m *Model) regenerateResourceCap() {
-	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
-	if m.freeParticles >= maxFree {
-		return
-	}
-
-	m.freeParticles = min(maxFree, m.freeParticles+RESOURCE_CAP_REGEN_PER_TICK)
-}
-
-func (m *Model) applyResourcePressure(anchor Point) bool {
-	utilization := float64(m.particlesInGrid) / float64(TOTAL_PARTICLE_RESOURCES)
-	if utilization <= RESOURCE_PRESSURE_THRESHOLD {
-		return true
-	}
-
-	// Past threshold, reclaim more than we add so dense states thin out gradually.
-	pressure := (utilization - RESOURCE_PRESSURE_THRESHOLD) / (1.0 - RESOURCE_PRESSURE_THRESHOLD)
-	reclaims := 1 + int(pressure)
-
-	for range reclaims {
-		if !m.reclaimOneParticle(anchor) {
-			return false
-		}
-	}
-
-	return true
-}
+// func (m *Model) regenerateResourceCap() {
+// 	maxFree := TOTAL_PARTICLE_RESOURCES + RESOURCE_CAP_BONUS_MAX
+// 	if m.freeParticles >= maxFree {
+// 		return
+// 	}
+//
+// 	m.freeParticles = min(maxFree, m.freeParticles+RESOURCE_CAP_REGEN_PER_TICK)
+// }
+//
+// func (m *Model) applyResourcePressure(anchor Point) bool {
+// 	utilization := float64(m.particlesInGrid) / float64(TOTAL_PARTICLE_RESOURCES)
+// 	if utilization <= RESOURCE_PRESSURE_THRESHOLD {
+// 		return true
+// 	}
+//
+// 	// Past threshold, reclaim more than we add so dense states thin out gradually.
+// 	pressure := (utilization - RESOURCE_PRESSURE_THRESHOLD) / (1.0 - RESOURCE_PRESSURE_THRESHOLD)
+// 	reclaims := 1 + int(pressure)
+//
+// 	fmt.Println(reclaims)
+//
+// 	for range reclaims {
+// 		if !m.reclaimOneParticle(anchor) {
+// 			return false
+// 		}
+// 	}
+//
+// 	return true
+// }
 
 func (m *Model) reclaimOneParticle(anchor Point) bool {
 	_ = anchor
@@ -1050,8 +1071,8 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 				m.grid[candidate.Y][candidate.X] = EmptyTrail
 				m.rootGrid[candidate.Y][candidate.X] = ROOT_NONE
 			}
-			m.particlesInGrid--
-			m.freeParticles++
+			// m.particlesInGrid--
+			// m.freeParticles++
 			return true
 		}
 	}
@@ -1096,8 +1117,8 @@ func (m *Model) reclaimOneParticle(anchor Point) bool {
 			m.grid[bestFallback.Y][bestFallback.X] = EmptyTrail
 			m.rootGrid[bestFallback.Y][bestFallback.X] = ROOT_NONE
 		}
-		m.particlesInGrid--
-		m.freeParticles++
+		// m.particlesInGrid--
+		// m.freeParticles++
 		return true
 	}
 
@@ -1124,8 +1145,8 @@ func (m *Model) erodeTrailAt(p Point, amount int) {
 		m.rootGrid[p.Y][p.X] = ROOT_NONE
 	}
 
-	m.particlesInGrid -= removed
-	m.freeParticles += removed
+	// m.particlesInGrid -= removed
+	// m.freeParticles += removed
 }
 
 func (m *Model) addParticleAt(p Point, rootID int) bool {
@@ -1139,25 +1160,29 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 		return false
 	}
 
-	if !m.applyResourcePressure(p) {
-		// fmt.Println("too much pressure")
-		return false
-	}
-
-	if !m.refillFreeParticles(p) {
-		if !m.reclaimOneParticle(p) {
-			fmt.Println("lost custody")
-			return false
-		}
-	}
+	// if !m.applyResourcePressure(p) {
+	// 	// fmt.Println("too much pressure")
+	// 	return false
+	// }
+	//
+	// if !m.refillFreeParticles(p) {
+	// 	if !m.reclaimOneParticle(p) {
+	// 		fmt.Println("lost custody")
+	// 		return false
+	// 	}
+	// }
 
 	if m.grid.index(p).isEmpty() {
 		*m.grid.index(p) = Trail{playerNum: m.turn + 1, value: 1}
 	} else {
 		m.grid.index(p).value += 1
 	}
-	m.particlesInGrid++
-	m.freeParticles--
+
+	player := m.currentPlayer()
+	// player.availibleParticles -= 1
+	player.placedParticles += 1
+	// m.particlesInGrid++
+	// m.freeParticles--
 
 	existingOwner := m.rootGrid[p.Y][p.X]
 	if existingOwner == ROOT_NONE {
@@ -1227,6 +1252,8 @@ func genIntGrid(size int, fill int) [][]int {
 // If playerFilter == 0, any non-empty cell is considered; otherwise
 // only cells with playerNum == playerFilter are used.
 func (m *Model) hoshenKopelman(playerFilter int) ([][]int, map[int]int) {
+	start := time.Now()
+
 	size := m.size
 	labels := make([][]int, size)
 	for y := 0; y < size; y++ {
@@ -1311,6 +1338,9 @@ func (m *Model) hoshenKopelman(playerFilter int) ([][]int, map[int]int) {
 			sizes[id]++
 		}
 	}
+
+	elapsed := time.Since(start)
+	fmt.Println("hoshenKopelman took:", elapsed)
 
 	return labels, sizes
 }
@@ -1482,22 +1512,22 @@ func init_model(size int) Model {
 		players: []Player{},
 		turn:    0,
 
-		grids:           make([]Grid, 0, 100),
-		size:            size,
-		time:            0,
-		particlesInGrid: 0,
-		freeParticles:   TOTAL_PARTICLE_RESOURCES,
+		grids: make([]Grid, 0, 100),
+		size:  size,
+		time:  0,
+		// particlesInGrid: 0,
+		// freeParticles:   TOTAL_PARTICLE_RESOURCES,
 	}
 
-	for y := range size {
-		for x := range size {
-			if !model.grid[y][x].isEmpty() {
-				model.particlesInGrid += int(model.grid[y][x].value)
-				model.rootGrid[y][x] = ROOT_MIXED
-			}
-		}
-	}
-	model.freeParticles = max(0, TOTAL_PARTICLE_RESOURCES-model.particlesInGrid)
+	// for y := range size {
+	// 	for x := range size {
+	// 		if !model.grid[y][x].isEmpty() {
+	// 			model.particlesInGrid += int(model.grid[y][x].value)
+	// 			model.rootGrid[y][x] = ROOT_MIXED
+	// 		}
+	// 	}
+	// }
+	// model.freeParticles = max(0, TOTAL_PARTICLE_RESOURCES-model.particlesInGrid)
 
 	return model
 
@@ -1852,139 +1882,6 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 	// panic("shouldnt reach this")
 }
 
-type DataPoint struct {
-	radius int
-	filled int
-}
-
-type Data []DataPoint
-
-type Arguments struct {
-	file *string
-	// operation *string
-	chart  *string
-	output *string
-	live   *bool
-}
-
-func parse_args() Arguments {
-	// args := os.Args[1:]
-	// if len(args) >= 2 {
-	// 	if args[0] == "--file" || args[0] == "-f" {
-	// 		return Arguments{
-	// 			file:    args[1],
-	// 			is_file: true,
-	// 		}
-	// 	}
-	// }
-	//
-	// return Arguments{
-	// 	file:    "",
-	// 	is_file: false,
-	// }
-
-	args := Arguments{
-		file: flag.String("file", "", "path to data file"),
-		// operation: flag.String("op", "", "operation to perform"),
-		chart:  flag.String("chart", "", "type of chart to make"),
-		output: flag.String("out", "", "prefix of output files"),
-		live:   flag.Bool("live", false, "run interactive mode with mouse-controlled force"),
-	}
-
-	flag.Parse()
-
-	return args
-}
-
-func (d *Data) toSeries() stats.Series {
-	series := make([]stats.Coordinate, 0, len(*d))
-
-	for _, point := range *d {
-		series = append(
-			series,
-			stats.Coordinate{X: float64(point.radius), Y: float64(point.filled)},
-		)
-	}
-
-	return series
-}
-
-func logLog(series stats.Series) stats.Series {
-
-	logged := make(stats.Series, 0, len(series))
-
-	for _, point := range series {
-		logged = append(logged, stats.Coordinate{X: math.Log(point.X), Y: math.Log(point.Y)})
-	}
-
-	return logged
-}
-
-func LinearRegression(s stats.Series) (float64, float64, error) {
-
-	if len(s) == 0 {
-		return 0, 0, nil
-	}
-
-	// Placeholder for the math to be done
-	var sum [5]float64
-
-	// Loop over data keeping index in place
-	i := 0
-	for ; i < len(s); i++ {
-		sum[0] += s[i].X
-		sum[1] += s[i].Y
-		sum[2] += s[i].X * s[i].X
-		sum[3] += s[i].X * s[i].Y
-		sum[4] += s[i].Y * s[i].Y
-	}
-
-	// Find gradient and intercept
-	f := float64(i)
-	gradient := (f*sum[3] - sum[0]*sum[1]) / (f*sum[2] - sum[0]*sum[0])
-	intercept := (sum[1] / f) - (gradient * sum[0] / f)
-
-	return intercept, gradient, nil
-}
-
-func renderProgressBar(series stats.Series) {
-	if len(series) == 0 {
-		fmt.Println("No data to display")
-		return
-	}
-
-	maxY := series[0].Y
-	for _, coord := range series {
-		if coord.Y > maxY {
-			maxY = coord.Y
-		}
-	}
-
-	if maxY == 0 {
-		maxY = 1
-	}
-
-	barWidth := 50
-	fmt.Println()
-	fmt.Println("Progress Chart (X = probability, Y = gradient):")
-	fmt.Println(strings.Repeat("-", barWidth+20))
-
-	for _, coord := range series {
-		filledWidth := int((coord.Y / maxY) * float64(barWidth))
-		if filledWidth < 0 {
-			filledWidth = 0
-		}
-		if filledWidth > barWidth {
-			filledWidth = barWidth
-		}
-
-		bar := strings.Repeat("#", filledWidth) + strings.Repeat("-", barWidth-filledWidth)
-		fmt.Printf("p=%.2f | %s | %.4f\n", coord.X, bar, coord.Y)
-	}
-
-	fmt.Println(strings.Repeat("-", barWidth+20))
-}
-
 // right now all the globals arent actually here
 // maybe they should be or maybe this should have a different name
 func initGlobals() {
@@ -2201,7 +2098,7 @@ func (g *LiveGame) drawOriginMarkers(screen *ebiten.Image) {
 		ebitenutil.DrawRect(
 			screen,
 			x+(SCALE-outer)/2,
-			y+(SCALE-outer)/2,
+			y+(SCALE-outer)/2+STATS_HEIGHT,
 			outer,
 			outer,
 			color.NRGBA{R: 0, G: 0, B: 0, A: 255},
@@ -2244,7 +2141,7 @@ func (g *LiveGame) currentTurn() int {
 }
 
 func (g *LiveGame) step() bool {
-	g.model.regenerateResourceCap()
+	// g.model.regenerateResourceCap()
 	g.model.nextGrid = gen_grid(g.model.size)
 	g.model.nextRoot = genIntGrid(g.model.size, ROOT_NONE)
 	end := g.model.johnTick(g.rng)
@@ -2313,14 +2210,18 @@ func (g *LiveGame) Update() error {
 
 	if !g.Moving {
 		if inpututil.IsMouseButtonJustPressed(ebiten.MouseButtonLeft) {
+			fmt.Println("started moving")
 			if g.model.turn >= 0 && g.model.turn < len(g.HasClicked) {
 				g.HasClicked[g.model.turn] = true
 			}
-			if !g.model.spawnWalkerAtNearestPlacedParticle(LIVE_MOUSE_POINT) {
-				g.model.spawnWalker()
+
+			resources := g.calcResourcesPerTurn()
+			fmt.Println(resources)
+
+			if !g.model.spawnWalkerAtNearestPlacedParticle(LIVE_MOUSE_POINT, resources) {
+				g.model.spawnWalker(resources)
 			}
 			g.Moving = true
-			fmt.Println("started moving")
 		}
 	}
 
@@ -2341,6 +2242,7 @@ func (g *LiveGame) Update() error {
 	for range 1 {
 		if g.step() {
 			fmt.Println("stopped moving")
+			fmt.Println()
 			g.Moving = false
 			g.toggleTurn()
 
@@ -2449,8 +2351,10 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 
 	// the above comment block is some scardey-cat shit
 
-	redRemaining := g.model.players[0].remaining
-	blueRemaining := g.model.players[1].remaining
+	// redRemaining := g.model.players[0].remaining
+	// blueRemaining := g.model.players[1].remaining
+	redRemaining := g.model.players[0].availibleParticles + g.model.players[0].placedParticles
+	blueRemaining := g.model.players[1].availibleParticles + g.model.players[1].placedParticles
 
 	// redPct := float64(redRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
 	// bluePct := float64(blueRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
@@ -2544,17 +2448,11 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 
 const OAT_MAX_SCALE = 0.2
 const OAT_MIN_SCALE = 0.05
-const OAT_MAX_QUANTITY = 100.0
+const OAT_MAX_QUANTITY = 1000.0
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
+	copyGrid2Image(g.model.grid, screen)
 
-	ebitenutil.DebugPrint(screen, "Click to spawn\nC to clear")
-
-	// opts := &ebiten.DrawImageOptions{}
-	// opts.GeoM.Scale(0.1, 0.1)
-	// opts.GeoM.Translate(SCREEN_SIZE/2, SCREEN_SIZE/2)
-	// screen.DrawImage(OatImage, opts)
-	//
 	// this should be made a bg image istead of making it every frame
 	for _, food := range g.theMap.Foods {
 		size := float64(OatImage.Bounds().Size().X)
@@ -2574,6 +2472,22 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 			float64(food.Position.Y)*SCALE+STATS_HEIGHT,
 		)
 		opts.GeoM.Translate(-size/2, -size/2)
+
+		if trail := g.model.grid.index(food.Position); !trail.isEmpty() {
+			if trail.playerNum == 1 {
+				// opts.ColorScale.ScaleWithColor(RED_START)
+				// if someone wants to do some better color math u r welcome to
+				// this is kind of a hack
+				opts.ColorScale.Scale(1, 0.5, 0.5, 1.0)
+			} else if trail.playerNum == 2 {
+				opts.ColorScale.Scale(0.5, 0.5, 1.0, 1.0)
+
+				// opts.ColorScale.ScaleWithColor(BLUE_START)
+			}
+			// opts.ColorScale.Scale(0.5, 0.5, 0.5, 1.0)
+		}
+
+		opts.ColorScale.Scale(1, 1, 1, 0.5)
 		// opts.GeoM.Translate(
 		// 	float64(food.Position.X*SCREEN_SIZE)/SIZE/2,
 		// 	float64(food.Position.Y*SCREEN_SIZE)/SIZE,
@@ -2582,7 +2496,6 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 		screen.DrawImage(OatImage, opts)
 	}
 
-	copyGrid2Image(g.model.grid, screen)
 	g.drawOriginMarkers(screen)
 
 	g.DrawStats(screen)

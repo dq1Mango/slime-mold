@@ -9,7 +9,7 @@ import (
 const MAP_PATH = "../maps/"
 
 type Food struct {
-	Quantity        int
+	Quantity        float64
 	ConsumptionRate float64 // pieces per tick or second idk yet
 	Position        Point
 }
@@ -77,28 +77,28 @@ func defaultMap() *Map {
 	return &Map{
 		Foods: []Food{
 			{
-				Quantity:        100,
-				ConsumptionRate: 5,
+				Quantity:        1000,
+				ConsumptionRate: 100,
 				Position:        Point{100, 100},
 			},
 			{
-				Quantity:        30,
-				ConsumptionRate: 3,
+				Quantity:        300,
+				ConsumptionRate: 30,
 				Position:        Point{100, 150},
 			},
 			{
-				Quantity:        30,
-				ConsumptionRate: 3,
+				Quantity:        300,
+				ConsumptionRate: 30,
 				Position:        Point{100, 50},
 			},
 			{
-				Quantity:        60,
-				ConsumptionRate: 1,
+				Quantity:        600,
+				ConsumptionRate: 10,
 				Position:        Point{25, 100},
 			},
 			{
-				Quantity:        60,
-				ConsumptionRate: 1,
+				Quantity:        600,
+				ConsumptionRate: 10,
 				Position:        Point{175, 100},
 			},
 		},
