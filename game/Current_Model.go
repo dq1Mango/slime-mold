@@ -53,7 +53,7 @@ const (
 	SCREEN_SIZE  = 1000
 	STATS_HEIGHT = 175
 	SCALE        = float64(SCREEN_SIZE) / GRID_SIZE
-	TPS          = 20
+	TPS          = 60
 )
 
 const (
@@ -734,12 +734,12 @@ func (m *Model) countClusters() {
 }
 
 func (m *Model) purgeCutBranches() {
-	start := time.Now()
+	// start := time.Now()
 
 	m.countClusters()
 
-	elapsed := time.Since(start)
-	fmt.Println("cluster counting took:", elapsed)
+	// elapsed := time.Since(start)
+	// fmt.Println("cluster counting took:", elapsed)
 
 	for i := range m.grid {
 		for j := range m.grid {
@@ -1131,18 +1131,22 @@ func (m *Model) erodeTrailAt(p Point, amount int) {
 func (m *Model) addParticleAt(p Point, rootID int) bool {
 
 	if p.X < 0 || p.X >= m.size || p.Y < 0 || p.Y >= m.size {
+		fmt.Println("OOB")
 		return false
 	}
 	if !m.grid[p.Y][p.X].isEmpty() && m.grid[p.Y][p.X].value >= MAX_CELL_PARTICLES {
+		fmt.Println("too many particles")
 		return false
 	}
 
 	if !m.applyResourcePressure(p) {
+		// fmt.Println("too much pressure")
 		return false
 	}
 
 	if !m.refillFreeParticles(p) {
 		if !m.reclaimOneParticle(p) {
+			fmt.Println("lost custody")
 			return false
 		}
 	}
@@ -1165,12 +1169,12 @@ func (m *Model) addParticleAt(p Point, rootID int) bool {
 	return true
 }
 
-// not using this right now, it didnt seem that important
 func (m *Model) depositWithOverflow(target Point, travel Vector, rootID int) bool {
 	spot := target
 	step := directionStep(travel)
 
-	for range 4 {
+	//
+	for range 1 {
 		if m.addParticleAt(spot, rootID) {
 			return true
 		}
@@ -1368,13 +1372,15 @@ func (g Grid) vectorIndex(vector Vector) *Trail {
 
 func (g *Grid) is_valid_point(point Point) bool {
 
-	radius := len(*g) / 2
+	return point.X > 0 && point.X < len(*g) && point.Y > 0 && point.Y < len(*g)
 
-	if point.X >= -radius && point.X <= radius && point.Y >= -radius && point.Y <= radius {
-		return true
-	} else {
-		return false
-	}
+	// radius := len(*g) / 2
+	//
+	// if point.X >= -radius && point.X <= radius && point.Y >= -radius && point.Y <= radius {
+	// 	return true
+	// } else {
+	// 	return false
+	// }
 }
 
 func clear_screen() {
@@ -1709,6 +1715,7 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 		player.walkers[i].velocity = newDir
 
 		quantized := player.walkers[i].location.roundToPoint()
+
 		// contactCell, enemyPlayer, hasContact := m.touchingOpponentCell(quantized, m.turn+1)
 
 		// *m.nextGrid.index(quantized) += 1
@@ -1720,22 +1727,43 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 
 		// i thought that reverting to the old way might fix a lil bug, but i dont think it did
 		if !trail.isEmpty() && trail.playerNum != m.turn+1 {
-			fmt.Println("detected adversary")
+			// fmt.Println(m.turn + 1)
+			// fmt.Println(trail.playerNum)
 			collision = true
 			// hah get it?
 			INTensity := int(walker.intensity)
-			if trail.value > INTensity {
-				trail.value -= INTensity
-				walker.intensity = 0
 
-			} else if trail.value < INTensity {
-				*trail = Trail{playerNum: m.turn + 1, value: 1}
-			} else {
+			destruction := min(INTensity, trail.value)
 
+			walker.intensity -= float64(destruction)
+			trail.value -= destruction
+			m.players[m.turn].remaining -= destruction
+
+			if trail.value < 1 {
 				*trail = EmptyTrail
 			}
-		} else if m.depositWithOverflow(quantized, newDir, walker.rootID) {
+
+			if walker.intensity <= MIN_WALKER_INTENSITY {
+				continue
+			}
+
+			// if trail.value > INTensity {
+			// 	trail.value -= INTensity
+			// 	walker.intensity = 0
+			//
+			// } else if trail.value < INTensity {
+			// 	*trail = Trail{playerNum: m.turn + 1, value: 1}
+			// } else {
+			//
+			// 	*trail = EmptyTrail
+			// }
+		}
+
+		// if m.depositWithOverflow(quantized, newDir, walker.rootID) {
+		if m.addParticleAt(quantized, walker.rootID) {
 			player.walkers[i].intensity -= 1
+		} else {
+			// fmt.Println("could not deposit")
 		}
 		// if m.depositWithOverflow(quantized, newDir, walker.rootID) {
 		// 	player.walkers[i].intensity -= 1
@@ -1788,7 +1816,8 @@ func (m *Model) johnTick(r *rand.Rand) bool {
 			player.walkers = append(
 				player.walkers,
 				Walker{
-					location:  add_vectors(og.location, newVelo),
+					// location:  add_vectors(og.location, newVelo),
+					location:  og.location,
 					intensity: og.intensity / 2,
 					velocity:  newVelo,
 					rootID:    og.rootID,
@@ -2409,57 +2438,76 @@ func (g *LiveGame) DrawStats(screen *ebiten.Image) {
 
 	text.Draw(screen, someText, fontFace, op)
 
-	redRemaining := 0
-	blueRemaining := 0
-	if len(g.model.players) > 0 {
-		redRemaining = g.model.players[0].remaining
-	}
-	if len(g.model.players) > 1 {
-		blueRemaining = g.model.players[1].remaining
-	}
+	// redRemaining := 0
+	// blueRemaining := 0
+	// if len(g.model.players) > 0 {
+	// 	redRemaining = g.model.players[0].remaining
+	// }
+	// if len(g.model.players) > 1 {
+	// 	blueRemaining = g.model.players[1].remaining
+	// }
 
-	redPct := float64(redRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
-	bluePct := float64(blueRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
-	redPct = max(0, min(1, redPct))
-	bluePct = max(0, min(1, bluePct))
+	// the above comment block is some scardey-cat shit
+
+	redRemaining := g.model.players[0].remaining
+	blueRemaining := g.model.players[1].remaining
+
+	// redPct := float64(redRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
+	// bluePct := float64(blueRemaining) / float64(TOTAL_PARTICLE_RESOURCES)
+	// redPct = max(0, min(1, redPct))
+	// bluePct = max(0, min(1, bluePct))
+
+	total := float64(redRemaining + blueRemaining)
+	redPct := float64(redRemaining) / total
+	bluePct := float64(blueRemaining) / total
 
 	pad := 24.0
 	barTop := 86.0
 	totalW := float64(SCREEN_SIZE) - pad*2
-	gap := 12.0
-	barW := (totalW - gap) / 2
+	// gap := 12.0
+	// gap := 0.0
+	// barW := (totalW - gap) / 2
+	barW := (totalW)
 	barH := 16.0
 
-	bg := color.NRGBA{R: 34, G: 34, B: 34, A: 220}
+	// bg := color.NRGBA{R: 34, G: 34, B: 34, A: 220}
 	red := color.NRGBA{R: 220, G: 70, B: 70, A: 240}
 	blue := color.NRGBA{R: 70, G: 130, B: 240, A: 240}
 
 	leftX := pad
-	rightX := pad + barW + gap
+	// rightX := pad + barW + gap
 
-	ebitenutil.DrawRect(screen, leftX, barTop, barW, barH, bg)
-	ebitenutil.DrawRect(screen, rightX, barTop, barW, barH, bg)
+	border := leftX + (barW * redPct)
+
+	// ebitenutil.DrawRect(screen, leftX, barTop, barW, barH, bg)
+	// ebitenutil.DrawRect(screen, rightX, barTop, barW, barH, bg)
 	ebitenutil.DrawRect(screen, leftX, barTop, barW*redPct, barH, red)
-	ebitenutil.DrawRect(screen, rightX, barTop, barW*bluePct, barH, blue)
+	ebitenutil.DrawRect(screen, border, barTop, barW*bluePct, barH, blue)
 
 	redText := fmt.Sprintf("%d", redRemaining)
 	blueText := fmt.Sprintf("%d", blueRemaining)
 
 	// draw the numeric resource counts centered inside each health bar
-	rw, rh := text.Measure(redText, fontFace, 0)
-	bw, bh := text.Measure(blueText, fontFace, 0)
+	// rw, rh := text.Measure(redText, fontFace, 0)
+	// bw, bh := text.Measure(blueText, fontFace, 0)
 
-	redTextX := leftX + (barW-rw)/2
-	redTextY := barTop + (barH-rh)/2
-	redOp := &text.DrawOptions{}
-	redOp.GeoM.Translate(redTextX, redTextY)
+	// redTextX := leftX + (barW-rw)/2
+	// redTextY := barTop + (barH-rh)/2
+	// redOp := &text.DrawOptions{}
+	// redOp.GeoM.Scale(2, 2)
+	// redOp.GeoM.Translate(redTextX, redTextY)
+
+	redOp := leftTextOpts(redText, 2, leftX, barTop+barH)
 	redOp.ColorScale.ScaleWithColor(color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	text.Draw(screen, redText, fontFace, redOp)
 
-	blueTextX := rightX + (barW-bw)/2
-	blueTextY := barTop + (barH-bh)/2
-	blueOp := &text.DrawOptions{}
-	blueOp.GeoM.Translate(blueTextX, blueTextY)
+	// blueTextX := rightX + (barW-bw)/2
+	// blueTextY := barTop + (barH-bh)/2
+
+	// blueOp := &text.DrawOptions{}
+	// blueOp.GeoM.Scale(2, 2)
+	// blueOp.GeoM.Translate(blueTextX, blueTextY)
+	blueOp := rightTextOpts(blueText, 2, leftX+barW, barTop+barH)
 	blueOp.ColorScale.ScaleWithColor(color.NRGBA{R: 255, G: 255, B: 255, A: 255})
 	text.Draw(screen, blueText, fontFace, blueOp)
 
