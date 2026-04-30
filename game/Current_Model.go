@@ -584,6 +584,8 @@ func (m *Model) seedOriginCluster(center Point, playerNum int, rootID int) {
 			}
 			m.grid[y][x] = Trail{playerNum: playerNum, value: 1}
 			m.rootGrid[y][x] = rootID
+
+			m.players[playerNum-1].availibleParticles++
 		}
 	}
 }
@@ -2463,7 +2465,8 @@ const OAT_MIN_SCALE = 0.05
 const OAT_MAX_QUANTITY = 1000.0
 
 func (g *LiveGame) Draw(screen *ebiten.Image) {
-	ebitenutil.DebugPrint(screen, "stop finding so many bugs >:(")
+	// all the bugs got found (hopefully)
+	// ebitenutil.DebugPrint(screen, "stop finding so many bugs >:(")
 
 	copyGrid2Image(g.model.grid, screen)
 	g.drawOriginMarkers(screen)
