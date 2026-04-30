@@ -749,6 +749,9 @@ func (m *Model) purgeCutBranches() {
 			if m.icutrgsimmo[i][j] == 0 {
 				if trail := m.grid[i][j]; trail.playerNum > 0 {
 					m.players[trail.playerNum-1].placedParticles -= trail.value
+					// m.grid[i][j].playerNum ^= 3
+					// m.grid[i][j].value /= 2
+
 				}
 				m.grid[i][j] = EmptyTrail
 			}
@@ -2704,11 +2707,11 @@ func copyGrid2Image(grid Grid, image *ebiten.Image) {
 
 				if trail.playerNum == 1 {
 					// color = FLOW_PALETTE[flowBucket]
-					colour = RedGradient.At(float64(value) / 10)
+					colour = RedGradient.At(float64(value) / MAX_CELL_PARTICLES)
 
 				} else if trail.playerNum == 2 {
 					// colour = OPPOSITE_FLOW_PALETTE[flowBucket]
-					colour = BlueGradient.At(float64(value) / 10)
+					colour = BlueGradient.At(float64(value) / MAX_CELL_PARTICLES)
 				} else {
 					println("uknown playnernum: ", trail.playerNum)
 				}
