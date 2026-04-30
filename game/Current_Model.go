@@ -2095,6 +2095,16 @@ func (g *LiveGame) drawOriginMarkers(screen *ebiten.Image) {
 	}
 }
 
+func (g *LiveGame) winnerBySpawnControl() int {
+	if g.model.grid.index(g.theMap.Spawn1).playerNum == 2 {
+		return 2
+	} else if g.model.grid.index(g.theMap.Spawn2).playerNum == 1 {
+		return 1
+	} else {
+		return 0
+	}
+}
+
 func (g *LiveGame) updateGameOverState() {
 	if g.GameOver {
 		return
@@ -2103,7 +2113,9 @@ func (g *LiveGame) updateGameOverState() {
 		return
 	}
 
-	winner := g.winnerByRootOrigin()
+	// winner := g.winnerByRootOrigin()
+	// u have to control the spawn square
+	winner := g.winnerBySpawnControl()
 	if winner != 0 {
 		fmt.Println("root origin")
 	}
@@ -2454,6 +2466,7 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 	ebitenutil.DebugPrint(screen, "stop finding so many bugs >:(")
 
 	copyGrid2Image(g.model.grid, screen)
+	g.drawOriginMarkers(screen)
 
 	// this should be made a bg image istead of making it every frame
 	for _, food := range g.theMap.Foods {
@@ -2502,9 +2515,31 @@ func (g *LiveGame) Draw(screen *ebiten.Image) {
 		screen.DrawImage(OatImage, opts)
 	}
 
-	g.drawOriginMarkers(screen)
-
 	g.DrawStats(screen)
+
+	// draw over the spawn square if someone won
+	if g.Winner != 0 {
+		var x, y int
+		var colour color.Color
+		if g.Winner == 1 {
+			spawn := g.theMap.Spawn2
+			x, y = spawn.X, spawn.Y
+			colour = RED_END
+		}
+		if g.Winner == 2 {
+			spawn := g.theMap.Spawn1
+			x, y = spawn.X, spawn.Y
+			colour = BLUE_END
+		}
+
+		x *= int(SCALE)
+		y *= int(SCALE)
+		y += STATS_HEIGHT
+
+		fmt.Println(x, y)
+
+		screen.Set(x, y, colour)
+	}
 	// screen.WritePixels(frame.Pix)
 }
 
